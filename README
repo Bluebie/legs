@@ -1,0 +1,5 @@
+This is legs, the JSON-RPC Microframework somewhat inspired by Camping but not all that much really. It uses a lot of ruby trickery to give you one class, Legs, which you can subclass and call .start on to make a Legs server clients can connect to, or you can do Legs.new(hostname) and connect to a server, or you can do both, and do YourSubclass.new(hostname) and open an outgoing connection where the server you connect to can then do RPC back at you to notify you of things and stuff. It's the kind of thing that would be good for making IM's and little game servers and stuff like that.
+
+I'm also thinking about trying to build a simple (heh, yeah, right) p2p library around it that apps can hook on to, where all the different apps would participate in this one global network and help each other communicate. That could be kind of interesting, but a much bigger job than Legs itself.
+
+Legs isn't finished yet, I'm still messing around testing it, but it's really not that complicated so it should be done soon. I'm just putting this up now to show some friends what Legs looks like.
