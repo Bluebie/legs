@@ -4,13 +4,13 @@ require '../legs'
 # client in shoes or something
 
 Legs.start do
-  @rooms = {}
+  @@rooms = {}
   # returns a list of available rooms
-  def available_rooms; @rooms.keys; end
+  def available_rooms; @@rooms.keys; end
   
   # joins/creates a room
   def join(room_name)
-    room = @rooms[room_name.to_s] ||= {'users' => [], 'messages' => [], 'topic' => 'No topic set'}
+    room = @@rooms[room_name.to_s] ||= {'users' => [], 'messages' => [], 'topic' => 'No topic set'}
     broadcast_to room, 'user_joined', user_object(self.caller)
     room['users'].push(self.caller) unless room['users'].include?(self.caller)
     return_obj = room.dup
@@ -20,15 +20,15 @@ Legs.start do
   
   # leaves a room
   def leave(room_name)
-    room = @rooms[room.to_s]
+    room = @@rooms[room.to_s]
     room['users'].delete(self.caller)
     broadcast_to room, 'user_left', room_name, user_object(self.caller)
-    @rooms.delete(room_name.to_s) if room['users'].empty?
+    @@rooms.delete(room_name.to_s) if room['users'].empty?
   end
   
   # sets the room topic message
   def set_topic(room, message)
-    @rooms[room.to_s]['topic'] = message.to_s
+    @@rooms[room.to_s]['topic'] = message.to_s
     broadcast_to room, 'room_changed', {'room' => room.to_s, 'topic' => message.to_s}
   end
   
@@ -48,7 +48,7 @@ Legs.start do
   
   # posts a message to a room
   def post_message(room_name, message)
-    room = @rooms[room_name.to_s]
+    room = @@rooms[room_name.to_s]
     room.messages.push(msg = ['user' => user_object(self.caller), 'time' => Time.now.to_i, 'message' => message.to_s} )
     trim_messages(room_name.to_s)
     broadcast_to room, 'room_message', room_name.to_s, user_object(object_id), message.to_s
@@ -65,7 +65,7 @@ Legs.start do
   
   # sends a notification to members of a room
   def broadcast_to room, *args
-    room = @rooms[room.to_s] if room.is_a? String
+    room = @@rooms[room.to_s] if room.is_a? String
     room['users'].each do |user|
       user.notify! *args
     end
@@ -83,7 +83,7 @@ Legs.start do
   
   # returns all the room names the user is in.
   def user_rooms user
-    @rooms.values.select { |room| room['users'].include?(user) }.map { |room| @rooms.index(room) }
+    @@rooms.values.select { |room| room['users'].include?(user) }.map { |room| @@rooms.index(room) }
   end
 end
 
