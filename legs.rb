@@ -43,6 +43,16 @@ class Legs
         end
       end
     end
+    
+    @async_space_class = Class.new
+    @async_space_class.module_eval do
+      def result
+        @errored = true and raise Exception.new(@data['error'].to_s) if @data['error'] unless @errored
+        return @data['result']
+      end
+      
+      def method_missing(meth, *args); end
+    end
   end
   
   # I think you can guess this one
@@ -51,7 +61,7 @@ class Legs
   # closes the connection and the threads and stuff for this user
   def close!
     return unless connected?
-    puts "User #{self.object_id} disconnecting" if self.class.log?
+    puts "User #{self.inspect} disconnecting" if self.class.log?
     @parent.__on_disconnect(self) if @parent and @parent.respond_to? :__on_disconnect
     @socket.close 
     @parent.users.delete(self) if @parent
@@ -65,8 +75,7 @@ class Legs
   # sends a normal RPC request that has a response
   def send!(method, *args)
     id = self.__get_unique_number
-    data = {'id' => id, 'method' => method.to_s, 'params' => args}
-    self.__send_data! data
+    self.__send_data! 'method' => method.to_s, 'params' => args, 'id' => id
     
     while @responses.keys.include?(id) == false
       sleep(0.05)
@@ -78,6 +87,23 @@ class Legs
     error = Exception.new(error) if error.instance_of?(String)
     raise error unless error.nil?
     return data['result']
+  end
+  
+  # does an async request which calls a block when response arrives
+  def send_async!(method, *args, &blk)
+    id = self.__get_unique_number
+    self.send_data! 'method' => method.to_s, 'params' => args, 'id' => id
+    
+    Thread.new do
+      while @responses.keys.include?(id) == false
+        sleep(0.05)
+      end
+      
+      async_space = @async_space_class.allocate
+      async_space.instance_variable_set(:@data, @responses.delete(id))
+      async_space.instance_variable_set(:@binding, blk.binding)
+      async_space.instance_eval blk
+    end
   end
   
   def method_missing(method, *args)
@@ -154,20 +180,23 @@ class << Legs
   attr_writer :log
   def log?; @log || true; end
   
-  # starts the server
+  # starts the server, pass nil for port to make a 'server' that doesn't actually accept connections
+  # This is useful for adding methods to Legs so that systems you connect to can call methods back on you
   def start(port=30274, &blk)
     return if started?
     raise "Legs.start requires a block" unless blk
     ObjectSpace.define_finalizer(self) { self.stop! }
-    
-    @listener = TCPServer.new(port)
     @users = []; @messages = []; @started = true
     
-    @acceptor_thread = Thread.new do
-      while started?
-        @users.push(user = Legs.new(@listener.accept, self))
-        puts "User #{user.object_id} connected, now there are #{@users.length} users" if log?
-        __on_connect(user) if respond_to? :__on_connect
+    unless port.nil? or port == false
+      @listener = TCPServer.new(port)
+      
+      @acceptor_thread = Thread.new do
+        while started?
+          @users.push(user = Legs.new(@listener.accept, self))
+          puts "User #{user.object_id} connected, now there are #{@users.length} users" if log?
+          __on_connect(user) if respond_to? :__on_connect
+        end
       end
     end
     

@@ -5,6 +5,8 @@ If you give Legs some methods, then anyone you connect to will be able to make c
 == To connect to a Legs server running on your own computer ==
 
   server = Legs.new
+   - OR -
+  server = Legs.new('localhost')
 
 == To connect to a remote server ==
 
@@ -22,7 +24,8 @@ If you give Legs some methods, then anyone you connect to will be able to make c
     end
   end
   
-  sleep
+  sleep # Stops ruby from closing as soon as Legs starts.
+  # don't put sleep if you're embedding the server in a shoes UI or something.
 
 == To add methods to legs, without creating a server ==
 
@@ -45,7 +48,7 @@ Legs instances, like the one you get from `caller`, and the array of them you ge
     end
   end
   
-  sleep;
+  sleep
 
 When you connect to this server, you can call the `count` method. Each time you call it, it will give you a number, starting with 1 and growing higher each time. Because it stores the 'counter' in the caller's meta hash, if another person connects, they will start out with the number 1 as well. You could connect to this with :)
 
