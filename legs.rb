@@ -4,6 +4,8 @@ require 'json' unless self.class.const_defined? 'JSON'
 require 'socket'
 require 'thread'
 
+Thread.abort_on_exception = true
+
 class Legs
   attr_reader :socket, :parent, :meta
   
@@ -22,6 +24,8 @@ class Legs
       
       if @parent and data['method']
         @parent.__data!(data, self)
+      elsif data['error'] and data['id'].nil?
+        raise Exception(data['error']).new
       else
         @responses[data['id']] = data
       end
@@ -33,7 +37,7 @@ class Legs
           self.close! if @socket.eof?
           @handle_data[@socket.gets(self.class.terminator)]
         rescue JSON::ParserError => e
-          self.__send_data({"error" => "JSON provided is invalid"})
+          self.__send_data!({"error" => "JSON provided is invalid. See http://json.org/ to see how to format correctly."})
         rescue IOError => e
           self.close!
         end
@@ -55,14 +59,14 @@ class Legs
   
   # send a notification to this user
   def notify!(method, *args)
-    self.__send_data({'method' => method.to_str, 'params' => self.__json_marshall(args)})
+    self.__send_data!({'method' => method.to_s, 'params' => args, 'id' => nil})
   end
   
   # sends a normal RPC request that has a response
   def send!(method, *args)
     id = self.__get_unique_number
-    data = {'id' => id, 'method' => method.to_s, 'params' => self.__json_marshall(args)}
-    self.__send_data data
+    data = {'id' => id, 'method' => method.to_s, 'params' => args}
+    self.__send_data! data
     
     while @responses.keys.include?(id) == false
       sleep(0.05)
@@ -76,13 +80,30 @@ class Legs
     return data['result']
   end
   
-  # makes it so for stuff that isn't built in to module or class or object instance methods, we can call with legs.thing
-  def method_missing(name, *args)
-    self.send!(name, *args)
+  def method_missing(method, *args)
+    return self.send(method, *args) if method.to_s =~ /^__/
+    super(method, *args)
   end
   
+  # hacks the send method so ancestor methods don't get in the way, if you want to use one, prefix with __
+  def send(method, *args)
+    return super(method.to_s.sub(/^__/, ''), *args) if method.to_s =~ /^__/
+    return super(method, *args) if self.__public_methods(false).include?(method)
+    super('send!', method.to_s, *args)
+  end
+
+  # sends raw object over the socket
+  def send_data!(data)
+    message = JSON.generate(__json_marshall(data)) + self.__class.terminator
+    @socket.write(message)
+    puts "> #{message}" if self.class.log?
+  end
+  
+  
+  private
+  
   # takes a ruby object, and converts it if needed in to marshalled hashes
-  def __json_marshall(object)
+  def json_marshall(object)
     safelist = [Array, Hash, Bignum, Fixnum, Integer, Float, TrueClass, FalseClass, String]
     return object if object.class.ancestors.detect(false) { |i| safelist.include?(i) }
     
@@ -91,21 +112,20 @@ class Legs
     # the default marshalling behaviour
     instance_vars = {}
     object.instance_variables.each do |var_name|
-      instance_vars[varname.to_s.gsub(/@/, '')] = self.__json_marshall(object.instance_variable_get(varname))
+      instance_vars[varname.to_s.sub(/@/, '')] = self.__json_marshall(object.instance_variable_get(varname))
     end
     
     return {'__jsonclass__' => [object.class.name]}.merge(instance_vars)
   end
   
   # takes an object from the network, and decodes any marshalled hashes back in to ruby objects
-  def __json_restore(object)
-    if object.is_a?(Hash) && object['__jsonclass__']
-      if const_defined?(object['__jsonclass__'])
+  def json_restore(object)
+    if object.is_a?(Hash) and object['__jsonclass__']
+      object_class = Module.const_get(object_name = object['__jsonclass__'].shift.to_s) rescue false
+      if object_class
         constructor = object.delete('__jsonclass__')
-        object_class = const_get(constructor.shift)
         
         return object_class._load(*constructor) if object_class.respond_to?(:_load) unless constructor.empty?
-        
         
         instance = object_class.allocate
         object.each_pair do |key, value|
@@ -113,22 +133,15 @@ class Legs
         end
         return instance
       else
-        raise Exception.new("Response contains a #{object['__jsonclass__']} but that class is not loaded locally.")
+        raise Exception.new("Response contains a #{object_name} but that class is not loaded locally.")
       end
     else
       return object
     end
   end
   
-  # sends raw object over the socket
-  def __send_data(data)
-    message = JSON.generate(data) + self.class.terminator
-    @socket.write(message)
-    puts "> #{message}" if self.class.log?
-  end
-  
   # gets a unique number that we can use to match requests to responses
-  def __get_unique_number; @unique_id ||= 0; @unique_id += 1; end
+  def get_unique_number; @unique_id ||= 0; @unique_id += 1; end
 end
 
 
@@ -142,9 +155,9 @@ class << Legs
   def log?; @log || true; end
   
   # starts the server
-  def start(port=30274)
+  def start(port=30274, &blk)
     return if started?
-    raise "You need to subclass Legs!" if self == Legs
+    raise "Legs.start requires a block" unless blk
     ObjectSpace.define_finalizer(self) { self.stop! }
     
     @listener = TCPServer.new(port)
@@ -162,20 +175,31 @@ class << Legs
       while started?
         sleep(0.05) and next if @messages.empty?
         data, from = @messages.shift
+        method = data['method']; params = data['params']
         begin
-          if self.class.public_method_defined?(data['method']) # self.class.instance_methods(false).include?(data['method']) && 
-            data['params'] = [] unless data['params'].is_a?(Array)
-            @caller = from
-            result = self.__send__(data['method'], *data['params'])
-            from.__send_data({'id' => data['id'], 'result' => result}) unless data['id'].nil?
+          puts "Method: #{method}"
+          if @server_object.public_methods(false).include?(method.to_s)
+            params = [] unless params.is_a?(Array)
+            @server_object.instance_variable_set(:@caller, from)
+            result = @server_object.__send__(method.to_s, *params)
+            from.__send_data!({'id' => data['id'], 'result' => result}) unless data['id'].nil?
           else
-            raise Exception.new("Cannot run #{data['method']}() because it is not defined in this server")
+            raise Exception.new("Cannot run '#{data['method']}' because it is not defined in this server")
           end
         rescue Exception => e
-          from.__send_data({'error' => e.to_s, 'id' => data['id']}) unless data['id'].nil?
+          from.__send_data!({'error' => e.to_s, 'id' => data['id']}) unless data['id'].nil?
         end
       end
     end
+    
+    # make the fake class
+    @server_class = Class.new
+    @server_class.module_eval { private; attr_reader :server, :caller; public }
+    @server_class.module_eval(&blk)
+    @server_object = @server_class.allocate
+    @server_object.instance_variable_set(:@server, self)
+    @server_object.initialize if @server_object.respond_to?(:initialize)
+    
   end
   
   # stops the server, disconnects the clients
