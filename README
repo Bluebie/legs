@@ -1,5 +1,57 @@
-This is legs, the JSON-RPC Microframework somewhat inspired by Camping but not all that much really. It uses a lot of ruby trickery to give you one class, Legs, which you can subclass and call .start on to make a Legs server clients can connect to, or you can do Legs.new(hostname) and connect to a server, or you can do both, and do YourSubclass.new(hostname) and open an outgoing connection where the server you connect to can then do RPC back at you to notify you of things and stuff. It's the kind of thing that would be good for making IM's and little game servers and stuff like that.
+This is Legs, the JSON-RPC Microframework somewhat inspired by Camping but not all that much really. It uses a lot of ruby trickery to give you one class, Legs, which can act as a server, a client, or a peer depending on how you use it.
 
-I'm also thinking about trying to build a simple (heh, yeah, right) p2p library around it that apps can hook on to, where all the different apps would participate in this one global network and help each other communicate. That could be kind of interesting, but a much bigger job than Legs itself.
+If you give Legs some methods, then anyone you connect to will be able to make calls back to those methods to notify you of things. Otherwise, your instance of legs will only be able to connect out to a legs server and call methods in that server, but not the other way around. If that's all you need, learning camping and using http might be a better way to go, as http is a more popular and more standard protocol. :)
 
-Legs isn't finished yet, I'm still messing around testing it, but it's really not that complicated so it should be done soon. I'm just putting this up now to show some friends what Legs looks like.
+== To connect to a Legs server running on your own computer ==
+
+  server = Legs.new
+
+== To connect to a remote server ==
+
+  server = Legs.new('web.address.to.server')
+
+== To connect to a server on port 1234 ==
+
+  server = Legs.new('web.address', 1234)
+
+== To create a legs server ==
+
+  Legs.start do
+    def callable_method(a, b, c = 'default')
+      return "You called with params #{a}, #{b}, and #{c}"
+    end
+  end
+  
+  sleep
+
+== To add methods to legs, without creating a server ==
+
+  Legs.start(false) do
+    def callable_method(a, b, c = 'default')
+      return "You called with params #{a}, #{b}, and #{c}"
+    end
+  end
+
+You should do this before creating instances of Legs with Legs.new. Adding methods like this is useful, because the "TCP" network connections Legs makes work in both directions, so if you have some methods, server's you connect to will be able to call your methods to notify you of events and stuff. If you don't give it `false` and let it start up a server, then you will be able to make out going connections and recieve connections, and they will all be treated equally, but with the important difference that when you make an outgoing connection with Legs.new, it won't be added to the 'users' array in the Legs server. This array only contains incomming connections. You could make your own array of outgoing connections to keep track ot them. :)
+
+Inside of your Legs.start block, there are two magic methods you can use in your code, these are `server` and `caller`. `server` references the Legs server object, which has methods like `users` and some other stuff you can use to your advantage. The `caller` method gives you the Legs instance representing that network connection (doesn't matter if they connected to you or vice versa).
+
+Legs instances, like the one you get from `caller`, and the array of them you get from `server.users` have a useful method called `meta` which gives you a hash you can store whatever you like in there, like the user's name, or if they have any special powers, so you can control which methods they can use and what they can do. Here's an example: :)
+
+  Legs.start do
+    def count
+      caller.meta[:counter] ||= 0
+      caller.meta[:counter] += 1
+    end
+  end
+  
+  sleep;
+
+When you connect to this server, you can call the `count` method. Each time you call it, it will give you a number, starting with 1 and growing higher each time. Because it stores the 'counter' in the caller's meta hash, if another person connects, they will start out with the number 1 as well. You could connect to this with :)
+
+  server = Legs.new('localhost')
+  puts "#{server.count}, #{server.count}, #{server.count}"
+
+And if you run that script, you should see in your terminal: "1, 2, 3". That's pretty much how Legs works. The Legs object has a few of it's own special methods: `close!`, `notify!`, `send!`, `send_async!`, `connected?`, `socket`, `parent`, `meta`, and `send_data!`. If you need to actually run a method on your server with one of these names, do: `server.send!(:connected?, a_param, another_param)` or whatever, and it'll run that method on the server for you. If you want to let the server know something, but don't care about the method's response, or any errors, you can do the same thing with `server.notify!`, which will make your program run faster and is generally niftier. :)
+
+Finally, if you're making a program for running over the internet, and want to make your app more responsive, you can call methods asyncronously. What this means is that the method won't return immidiately, but instead will send the request out to your network, and your program will continue to run, and then when the server responds, a block you provide will be run. Inside that block you use the 'result' to get the result of your request.
