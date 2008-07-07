@@ -1,24 +1,24 @@
-= About Legs =
+= About Legs
 
 This is Legs, the JSON-RPC Microframework somewhat inspired by Camping but not all that much really. It uses a lot of ruby trickery to give you one class, Legs, which can act as a server, a client, or a peer depending on how you use it.
 
 If you give Legs some methods, then anyone you connect to will be able to make calls back to those methods to notify you of things. Otherwise, your instance of legs will only be able to connect out to a legs server and call methods in that server, but not the other way around. If that's all you need, learning camping and using http might be a better way to go, as http is a more popular and more standard protocol. :)
 
-== To connect to a Legs server running on your own computer ==
+== To connect to a Legs server running on your own computer
 
   server = Legs.new
    - OR -
   server = Legs.new('localhost')
 
-== To connect to a remote server ==
+== To connect to a remote server
 
   server = Legs.new('web.address.to.server')
 
-== To connect to a server on port 1234 ==
+== To connect to a server on port 1234
 
   server = Legs.new('web.address', 1234)
 
-== To create a legs server ==
+== To create a legs server
 
   Legs.start do
     def callable_method(a, b, c = 'default')
@@ -29,7 +29,7 @@ If you give Legs some methods, then anyone you connect to will be able to make c
   sleep # Stops ruby from closing as soon as Legs starts.
   # don't put sleep if you're embedding the server in a shoes UI or something.
 
-== To add methods to legs, without creating a server ==
+== To add methods to legs, without creating a server
 
   Legs.start(false) do
     def callable_method(a, b, c = 'default')
