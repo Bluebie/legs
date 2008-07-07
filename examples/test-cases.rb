@@ -60,5 +60,5 @@ puts "Testing regular error"
 v = i.error rescue :good
 puts v == :good ?'Success':'Failure'
 
-puts "testing nofify!"
+puts "testing notify!"
 i.test_notify

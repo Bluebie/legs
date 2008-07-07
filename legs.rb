@@ -108,7 +108,7 @@ class Legs
 
   # sends raw object over the socket
   def send_data!(data)
-    raise StandardError.new("Lost remote connection") unless connected?
+    raise "Lost remote connection" unless connected?
     message = JSON.generate(__json_marshall(data)) + self.__class.terminator
     @socket.write(message)
     puts "> #{message}" if self.class.log?
@@ -148,7 +148,7 @@ class Legs
         end
         return instance
       else
-        raise StandardError.new("Response contains a #{object_name} but that class is not loaded locally.")
+        raise "Response contains a #{object_name} but that class is not loaded locally."
       end
     else
       return object
@@ -204,9 +204,9 @@ class << Legs
         method = data['method']; params = data['params']
         
         begin
-          raise StandardError.new("Supplied method is not a String") unless method.is_a?(String)
-          raise StandardError.new("Supplied params object is not an Array") unless params.is_a?(Array)
-          raise StandardError.new("Cannot run '#{method}' because it is not defined in this server") unless  @server_object.public_methods(false).include?(method.to_s)
+          raise "Supplied method is not a String" unless method.is_a?(String)
+          raise "Supplied params object is not an Array" unless params.is_a?(Array)
+          raise "Cannot run '#{method}' because it is not defined in this server" unless  @server_object.public_methods(false).include?(method.to_s)
           
           puts "Method: #{method}" if log?
           

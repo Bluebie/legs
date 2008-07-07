@@ -1,3 +1,5 @@
+= About Legs =
+
 This is Legs, the JSON-RPC Microframework somewhat inspired by Camping but not all that much really. It uses a lot of ruby trickery to give you one class, Legs, which can act as a server, a client, or a peer depending on how you use it.
 
 If you give Legs some methods, then anyone you connect to will be able to make calls back to those methods to notify you of things. Otherwise, your instance of legs will only be able to connect out to a legs server and call methods in that server, but not the other way around. If that's all you need, learning camping and using http might be a better way to go, as http is a more popular and more standard protocol. :)
