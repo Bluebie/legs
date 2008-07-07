@@ -193,6 +193,9 @@ class << Legs
     @server_class = Class.new
     @server_class.module_eval { private; attr_reader :server, :caller; public }
     @server_class.module_eval(&blk)
+    @server_object = @server_class.allocate
+    @server_object.instance_variable_set(:@server, self)
+    @server_object.initialize if @server_object.respond_to?(:initialize)
     
     @message_processor = Thread.new do
       while started?
@@ -203,17 +206,12 @@ class << Legs
         begin
           raise StandardError.new("Supplied method is not a String") unless method.is_a?(String)
           raise StandardError.new("Supplied params object is not an Array") unless params.is_a?(Array)
+          raise StandardError.new("Cannot run '#{method}' because it is not defined in this server") unless  @server_object.public_methods(false).include?(method.to_s)
           
           puts "Method: #{method}" if log?
           
-          server_object = @server_class.allocate
-          server_object.instance_variable_set(:@server, self)
-          server_object.initialize if server_object.respond_to?(:initialize)
-          server_object.instance_variable_set(:@caller, from)
-          
-          raise StandardError.new("Cannot run '#{method}' because it is not defined in this server") unless  server_object.public_methods(false).include?(method.to_s)
-          
-          result = server_object.__send__(method.to_s, *params)
+          @server_object.instance_variable_set(:@caller, from)
+          result = @server_object.__send__(method.to_s, *params)
           
           from.send_data!({'id' => data['id'], 'result' => result}) unless data['id'].nil?
           
