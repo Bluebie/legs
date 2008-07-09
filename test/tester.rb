@@ -1,5 +1,10 @@
 require '../lib/legs.rb'
 
+# class to test the marshaling
+class Testing
+  attr_accessor :a, :b, :c
+end
+
 Legs.log = false
 
 # a simple server to test with
@@ -20,10 +25,16 @@ Legs.start(6425) do
   def test_notify
     puts "Success"
   end
+  
+  def marshal
+    obj = Testing.new
+    obj.a = 1; obj.b = 2; obj.c = 3
+    return obj
+  end
 end
 
 ## connects and tests a bunch of things
-puts "Testing syncronous method_missing style echo"
+puts "Testing syncronous echo"
 i = Legs.new('localhost',6425)
 puts i.echo('Hello World') == 'Hello World' ?"Success":"Failure"
 
@@ -62,3 +73,10 @@ puts v == :good ?'Success':'Failure'
 
 puts "testing notify!"
 i.test_notify
+
+puts "testing marshalling"
+m = i.marshal
+puts m.a == 1 && m.b == 2 && m.c == 3 ?'Success':'Failure'
+
+puts
+puts "Done"

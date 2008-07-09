@@ -18,8 +18,6 @@ class Legs
     @responses = {}; @meta = {}; @parent ||= self.class
     
     @handle_data = Proc.new do |data|
-      print ": #{data}" if self.class.log?
-      
       data = self.__json_restore(JSON.parse(data))
       
       if @parent and data['method']
@@ -59,11 +57,13 @@ class Legs
   
   # send a notification to this user
   def notify!(method, *args)
+    puts "Notify #{self.__inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.__class.log?
     self.__send_data!({'method' => method.to_s, 'params' => args, 'id' => nil})
   end
   
   # sends a normal RPC request that has a response
   def send!(method, *args)
+    puts "Call #{self.__inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.__class.log?
     id = self.__get_unique_number
     self.send_data! 'method' => method.to_s, 'params' => args, 'id' => id
     
@@ -75,11 +75,15 @@ class Legs
     
     error = data['error']
     raise error unless error.nil?
+    
+    puts ">> #{method} #=> #{data['result'].inspect}" if self.__class.log?
+    
     return data['result']
   end
   
   # does an async request which calls a block when response arrives
   def send_async!(method, *args, &blk)
+    puts "Call #{self.__inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.__class.log?
     id = self.__get_unique_number
     self.send_data! 'method' => method.to_s, 'params' => args, 'id' => id
     
@@ -109,47 +113,64 @@ class Legs
   # sends raw object over the socket
   def send_data!(data)
     raise "Lost remote connection" unless connected?
-    message = JSON.generate(__json_marshall(data)) + self.__class.terminator
+    message = JSON.generate(__json_marshal(data)) + self.__class.terminator
     @socket.write(message)
-    puts "> #{message}" if self.class.log?
   end
   
   
   private
   
   # takes a ruby object, and converts it if needed in to marshalled hashes
-  def json_marshall(object)
-    safelist = [Array, Hash, Bignum, Fixnum, Integer, Float, TrueClass, FalseClass, String]
-    return object if object.class.ancestors.detect(false) { |i| safelist.include?(i) }
-    
-    return {'__jsonclass__' => [object.class.name, object._dump]} if object.respond_to?(:_dump)
-    
-    # the default marshalling behaviour
-    instance_vars = {}
-    object.instance_variables.each do |var_name|
-      instance_vars[varname.to_s.sub(/@/, '')] = self.__json_marshall(object.instance_variable_get(varname))
+  def json_marshal(object)
+    case object
+    when Bignum, Fixnum, Integer, Float, TrueClass, FalseClass, String, NilClass
+      return object
+    when Hash
+      out = Hash.new
+      object.each_pair { |k,v| out[k.to_s] = __json_marshal(v) }
+      return out
+    when Array
+      return object.map { |v| __json_marshal(v) }
+    else
+      return {'__jsonclass__' => [object.class.name, object._dump]} if object.respond_to?(:_dump)
+      
+      # the default marshalling behaviour
+      instance_vars = {}
+      object.instance_variables.each do |var_name|
+        instance_vars[var_name.to_s.sub(/@/, '')] = self.__json_marshal(object.instance_variable_get(var_name))
+      end
+      
+      return {'__jsonclass__' => [object.class.name]}.merge(instance_vars)
     end
-    
-    return {'__jsonclass__' => [object.class.name]}.merge(instance_vars)
   end
   
   # takes an object from the network, and decodes any marshalled hashes back in to ruby objects
   def json_restore(object)
-    if object.is_a?(Hash) and object['__jsonclass__']
-      object_class = Module.const_get(object_name = object['__jsonclass__'].shift.to_s) rescue false
-      if object_class
+    case object
+    when Hash
+      if object.keys.include? '__jsonclass__'
         constructor = object.delete('__jsonclass__')
+        class_name = constructor.shift.to_s
+        object_class = Module.const_get(class_name) rescue false
         
-        return object_class._load(*constructor) if object_class.respond_to?(:_load) unless constructor.empty?
-        
-        instance = object_class.allocate
-        object.each_pair do |key, value|
-          instance.instance_variable_set("@#{key}", self.__json_restore(value))
+        if object_class.name == class_name
+          return object_class._load(*constructor) if object_class.respond_to?(:_load) unless constructor.empty?
+          
+          instance = object_class.allocate
+          object.each_pair do |key, value|
+            instance.instance_variable_set("@#{key}", self.__json_restore(value))
+          end
+          return instance
+        else
+          raise "Response contains a #{class_name} but that class is not loaded locally."
         end
-        return instance
       else
-        raise "Response contains a #{object_name} but that class is not loaded locally."
+        hash = Hash.new
+        object.each_pair { |k,v| hash[k] = self.__json_restore(v) }
+        return hash
       end
+    when Array
+      return object.map { |i| self.__json_restore(i) }
     else
       return object
     end
