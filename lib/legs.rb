@@ -162,20 +162,22 @@ end
 
 # the server is started by subclassing Legs, then SubclassName.start
 class << Legs
-  attr_writer :terminator
-  attr_reader :caller
-  def terminator; @terminator || "\n"; end
-  def users; @users || []; end
-  attr_writer :log
-  def log?; @log.nil? ? true : @log; end
+  attr_accessor :terminator, :log
+  attr_reader :users, :server_object
+  alias_method :log?, :log
+  
+  def initializer
+    ObjectSpace.define_finalizer(self) { self.stop! }
+    @users = []; @messages = []; @terminator = "\n"; @log = true
+  end
+  
   
   # starts the server, pass nil for port to make a 'server' that doesn't actually accept connections
   # This is useful for adding methods to Legs so that systems you connect to can call methods back on you
   def start(port=30274, &blk)
     return if started?
     raise "Legs.start requires a block" unless blk
-    ObjectSpace.define_finalizer(self) { self.stop! }
-    @users = []; @messages = []; @started = true
+    @started = true
     
     unless port.nil? or port == false
       @listener = TCPServer.new(port)
@@ -195,23 +197,29 @@ class << Legs
     @server_class.module_eval(&blk)
     @server_object = @server_class.allocate
     @server_object.instance_variable_set(:@server, self)
-    @server_object.initialize if @server_object.respond_to?(:initialize)
+    @server_object.instance_eval { initialize }
     
     @message_processor = Thread.new do
       while started?
         sleep(0.01) and next if @messages.empty?
         data, from = @messages.shift
         method = data['method']; params = data['params']
+        methods = @server_object.public_methods(false)
         
         begin
           raise "Supplied method is not a String" unless method.is_a?(String)
           raise "Supplied params object is not an Array" unless params.is_a?(Array)
-          raise "Cannot run '#{method}' because it is not defined in this server" unless  @server_object.public_methods(false).include?(method.to_s)
+          raise "Cannot run '#{method}' because it is not defined in this server" unless methods.include?(method.to_s) or methods.include?('method_missing')
           
           puts "Method: #{method}" if log?
           
           @server_object.instance_variable_set(:@caller, from)
-          result = @server_object.__send__(method.to_s, *params)
+          
+          if methods.include?(method.to_s)
+            result = @server_object.__send__(method.to_s, *params)
+          else
+            result = @server_object.instance_eval { method_missing(method.to_s, *params) }
+          end
           
           from.send_data!({'id' => data['id'], 'result' => result}) unless data['id'].nil?
           
@@ -249,6 +257,8 @@ class << Legs
     client.close!
   end
 end
+
+Legs.initializer
 
 
 class Legs::AsyncData

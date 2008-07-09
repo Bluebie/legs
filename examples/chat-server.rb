@@ -1,63 +1,68 @@
-require '../legs'
+require '../lib/legs'
 
 # this is a work in progress, api's will change and break, one day there will be a functional matching
 # client in shoes or something
 
 Legs.start do
-  @@rooms = {}
+  def initialize
+    @rooms = Hash.new { {'users' => [], 'messages' => [], 'topic' => 'No topic set'} }
+    @rooms['Lobby'] = {'topic' => 'General Chit Chat', 'messages' => [], 'users' => []}
+  end
   # returns a list of available rooms
-  def available_rooms; @@rooms.keys; end
+  def available_rooms; @rooms.keys; end
   
   # joins/creates a room
   def join(room_name)
-    room = @@rooms[room_name.to_s] ||= {'users' => [], 'messages' => [], 'topic' => 'No topic set'}
-    broadcast_to room, 'user_joined', user_object(self.caller)
-    room['users'].push(self.caller) unless room['users'].include?(self.caller)
-    return_obj = room.dup
-    return_obj['users'].map! { |user| user_object(user) }
-    return_obj
+    room = room_object(room_name)
+    broadcast_to room, 'user_joined', room_name, user_object(caller)
+    room['users'].push(caller) unless room['users'].include?(caller)
+    room_object room_name, :remote
   end
   
   # leaves a room
   def leave(room_name)
-    room = @@rooms[room.to_s]
-    room['users'].delete(self.caller)
-    broadcast_to room, 'user_left', room_name, user_object(self.caller)
-    @@rooms.delete(room_name.to_s) if room['users'].empty?
+    room = @rooms[room_name.to_s]
+    room['users'].delete(caller)
+    broadcast_to room, 'user_left', room_name, user_object(caller)
+    #@rooms.delete(room_name.to_s) if room['users'].empty?
+    true
   end
   
   # sets the room topic message
   def set_topic(room, message)
-    @@rooms[room.to_s]['topic'] = message.to_s
-    broadcast_to room, 'room_changed', {'room' => room.to_s, 'topic' => message.to_s}
+    @rooms[room.to_s]['topic'] = message.to_s
+    broadcast_to room, 'room_changed', room_object(room, :remote, :name, :topic)
   end
   
   # sets the user's name
   def set_name(name)
-    self.caller.meta[:name] = name.to_s
-    user_rooms(self.caller).each do |room_name|
-      broadcast_to room_name, 'user_changed', user_object(self.caller)
+    caller.meta[:name] = name.to_s
+    user_rooms(caller).each do |room_name|
+      broadcast_to room_name, 'user_changed', user_object(caller)
     end
   end
   
   # returns information about ones self, clients thusly can find out their user 'id' number
-  def user_info(object_id = nil)
-    user = object_id.nil? ? self.caller : users.select { |u| u.object_id == object_id.to_i }.first
-    user_object(user)
+  def get_user(object_id = nil)
+    user = user_object( object_id.nil? ? caller : users.select { |u| u.object_id == object_id.to_i }.first )
+    user['rooms'] = user_rooms(user)
+    return user
   end
   
   # posts a message to a room
   def post_message(room_name, message)
-    room = @@rooms[room_name.to_s]
-    room.messages.push(msg = ['user' => user_object(self.caller), 'time' => Time.now.to_i, 'message' => message.to_s} )
-    trim_messages(room_name.to_s)
-    broadcast_to room, 'room_message', room_name.to_s, user_object(object_id), message.to_s
+    room = room_object(room_name)
+    room['messages'].push(msg = {'user' => user_object(caller), 'time' => Time.now.to_i, 'message' => message.to_s} )
+    trim_messages room
+    broadcast_to room, 'message', room_name.to_s, msg
+    return msg
   end
   
   private
   
   # trims the message backlog
   def trim_messages room
+    room = room_object(room) if room.is_a?(String)
     while room['messages'].length > 250
       room['messages'].shift
     end
@@ -65,7 +70,7 @@ Legs.start do
   
   # sends a notification to members of a room
   def broadcast_to room, *args
-    room = @@rooms[room.to_s] if room.is_a? String
+    room = @rooms[room.to_s] if room.is_a? String
     room['users'].each do |user|
       user.notify! *args
     end
@@ -81,12 +86,20 @@ Legs.start do
     return object
   end
   
+  def room_object room_name, target = :local, *only
+    object = @rooms[room_name.to_s].dup
+    object['users'].delete_if {|user| user.connected? == false }
+    object['users'] = object['users'].map { |user| user_object(user) } if target == :remote
+    object['topic'] = 'No topic set' if object['topic'].nil? or object['topic'].empty?
+    object['name'] = room_name.to_s if target == :remote
+    object.delete_if { |key, value| only.include?(key.to_sym) == false } unless only.empty?
+    object
+  end
+  
   # returns all the room names the user is in.
   def user_rooms user
-    @@rooms.values.select { |room| room['users'].include?(user) }.map { |room| @@rooms.index(room) }
+    @rooms.values.select { |room| room['users'].include?(user) }.map { |room| @rooms.index(room) }
   end
 end
 
-
-ChatServer.start
 sleep

@@ -1,4 +1,4 @@
-require '../legs'
+require '../lib/legs'
 
 # This is how simple a Legs server can look.
 

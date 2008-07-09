@@ -1,4 +1,4 @@
-require '../legs.rb'
+require '../lib/legs.rb'
 
 Legs.log = false
 
