@@ -2,6 +2,7 @@ require '../lib/legs'
 
 # this is a work in progress, api's will change and break, one day there will be a functional matching
 # client in shoes or something
+class User; attr_accessor :id, :name; end
 
 Legs.start do
   def initialize
@@ -13,9 +14,18 @@ Legs.start do
   
   # joins/creates a room
   def join(room_name)
+    unless @rooms.keys.include?(room_name)
+      @rooms[room_name.to_s] = @rooms[room_name]
+      server.broadcast :room_created, room_name
+    end
+    
     room = room_object(room_name)
-    broadcast_to room, 'user_joined', room_name, user_object(caller)
-    room['users'].push(caller) unless room['users'].include?(caller)
+    
+    unless room['users'].include?(caller)
+      broadcast_to room, 'user_joined', room_name, user_object(caller)
+      room['users'].push(caller)
+    end
+    
     room_object room_name, :remote
   end
   
@@ -24,7 +34,6 @@ Legs.start do
     room = @rooms[room_name.to_s]
     room['users'].delete(caller)
     broadcast_to room, 'user_left', room_name, user_object(caller)
-    #@rooms.delete(room_name.to_s) if room['users'].empty?
     true
   end
   
@@ -40,6 +49,7 @@ Legs.start do
     user_rooms(caller).each do |room_name|
       broadcast_to room_name, 'user_changed', user_object(caller)
     end
+    true
   end
   
   # returns information about ones self, clients thusly can find out their user 'id' number
