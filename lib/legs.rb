@@ -257,13 +257,13 @@ class << Legs
   end
   
   # stops the server, disconnects the clients
-  def stop!
+  def stop
     @started = false
     @users.each { |user| user.close! }
   end
   
   # sends a notification message to all connected clients
-  def broadcast!(method, *args)
+  def broadcast(method, *args)
     @users.each { |user| user.notify!(method, *args) }
   end
   
@@ -275,7 +275,7 @@ class << Legs
   # returns true if server is running
   def started?; @started; end
   
-  # creates a legs client, and passes it to &blk, closes client after block finishes running
+  # creates a legs client, and passes it to supplied block, closes client after block finishes running
   def open(*args, &blk)
     client = Legs.new(*args)
     blk[client]
