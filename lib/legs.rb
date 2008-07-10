@@ -50,7 +50,7 @@ class Legs
   def close!
     return unless connected?
     puts "User #{self.inspect} disconnecting" if self.class.log?
-    @parent.__on_disconnect(self) if @parent and @parent.respond_to? :__on_disconnect
+    @parent.server_object.on_disconnect(self) if @parent and @parent.server_object.respond_to? :on_disconnect
     @socket.close 
     @parent.users.delete(self) if @parent
   end
@@ -202,18 +202,6 @@ class << Legs
     raise "Legs.start requires a block" unless blk
     @started = true
     
-    unless port.nil? or port == false
-      @listener = TCPServer.new(port)
-      
-      @acceptor_thread = Thread.new do
-        while started?
-          @users.push(user = Legs.new(@listener.accept, self))
-          puts "User #{user.object_id} connected, number of users: #{@users.length}" if log?
-          __on_connect(user) if respond_to? :__on_connect
-        end
-      end
-    end
-    
     # make the fake class
     @server_class = Class.new
     @server_class.module_eval { private; attr_reader :server, :caller; public }
@@ -254,6 +242,18 @@ class << Legs
         end
       end
     end
+    
+    unless port.nil? or port == false
+      @listener = TCPServer.new(port)
+      
+      @acceptor_thread = Thread.new do
+        while started?
+          @users.push(user = Legs.new(@listener.accept, self))
+          puts "User #{user.object_id} connected, number of users: #{@users.length}" if log?
+          @server_object.on_connect(user) if @server_object.respond_to? :on_connect
+        end
+      end
+    end
   end
   
   # stops the server, disconnects the clients
@@ -265,6 +265,15 @@ class << Legs
   # sends a notification message to all connected clients
   def broadcast(method, *args)
     @users.each { |user| user.notify!(method, *args) }
+  end
+  
+  # Finds a user by the value of a certain property... like find_user_by :object_id, 12345
+  def find_user_by property, value
+    @users.find { |user| user.__send(property) == value }
+  end
+  
+  def find_users_by property, *values
+    @users.select { |user| user.__send(property) == value }
   end
   
   # gets called to handle all incomming messages (RPC requests)
