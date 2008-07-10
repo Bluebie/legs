@@ -92,7 +92,9 @@ class Legs
         sleep(0.05)
       end
       
-      blk[Legs::AsyncData.new(@responses.delete(id))]
+      data = @responses.delete(id)
+      puts ">> #{method} #=> #{data['result'].inspect}" if self.__class.log?
+      blk[Legs::AsyncData.new(data)]
     end
   end
   
@@ -232,7 +234,7 @@ class << Legs
           raise "Supplied params object is not an Array" unless params.is_a?(Array)
           raise "Cannot run '#{method}' because it is not defined in this server" unless methods.include?(method.to_s) or methods.include?('method_missing')
           
-          puts "Method: #{method}" if log?
+          puts "Call #{method}(#{params.map { |i| i.inspect }.join(', ')})" if log?
           
           @server_object.instance_variable_set(:@caller, from)
           
@@ -241,6 +243,8 @@ class << Legs
           else
             result = @server_object.instance_eval { method_missing(method.to_s, *params) }
           end
+          
+          puts ">> #{method} #=> #{result.inspect}" if log?
           
           from.send_data!({'id' => data['id'], 'result' => result}) unless data['id'].nil?
           
