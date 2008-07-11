@@ -10,7 +10,11 @@ Legs.start do
     @rooms['Lobby'] = {'topic' => 'General Chit Chat', 'messages' => [], 'users' => []}
   end
   # returns a list of available rooms
-  def available_rooms; @rooms.keys; end
+  def rooms
+    room_list = Hash.new
+    @rooms.keys.each { |rn| room_list[rn] = room_object rn, :remote, :topic, :users, :messages }
+    room_list
+  end
   
   # joins/creates a room
   def join(room_name)
@@ -19,12 +23,12 @@ Legs.start do
       server.broadcast :room_created, room_name
     end
     
-    room = room_object(room_name)
-    
-    unless room['users'].include?(caller)
-      broadcast_to room, 'user_joined', room_name, user_object(caller)
-      room['users'].push(caller)
-    end
+#     room = room_object(room_name)
+#     
+#     unless room['users'].include?(caller)
+#       broadcast_to room, 'user_joined', room_name, user_object(caller)
+#       room['users'].push(caller)
+#     end
     
     room_object room_name, :remote
   end

@@ -276,6 +276,15 @@ class << Legs
     @users.select { |user| user.__send(property) == value }
   end
   
+  # gives you an array of all the instances of Legs which are still connected
+  def instances
+    list = Array.new
+    ObjectSpace.each_object(self) do |leg|
+      list.push leg if leg.connected?
+    end
+    return list
+  end
+  
   # gets called to handle all incomming messages (RPC requests)
   def __data!(data, from)
     @messages.push([data, from])
