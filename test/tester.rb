@@ -57,7 +57,7 @@ puts ii.count == 1 && ii.count == 2 && ii.count == 3 ?'Success':'Failure'
 ii.close!
 
 sleep(0.5)
-puts "Testing disconnection went well"
+puts "Testing instance.connected? works well"
 puts ii.connected? == false && $server_instance.connected? == false ?'Success':'Failure'
 
 ii = nil
@@ -65,7 +65,7 @@ ObjectSpace.garbage_collect
 
 puts "Testing server disconnect worked correctly"
 sleep(0.5)
-puts Legs.users.length == 1 ?'Success':"Failure: #{Legs.users.length}"
+puts Legs.incoming.length == 1 ?'Success':"Failure: #{Legs.users.length}"
 
 puts "Testing async call..."
 i.send_async!(:echo, 'Testing') do |r|

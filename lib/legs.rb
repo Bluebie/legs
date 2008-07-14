@@ -13,7 +13,7 @@ class Legs
   def initialize(host = 'localhost', port = 30274)
     self.class.start(port) if self.class != Legs && !self.class.started?
     ObjectSpace.define_finalizer(self) { self.close! }
-    @parent = false; @responses = Hash.new; @meta = {}; @closed = false
+    @parent = false; @responses = Hash.new; @meta = {}; @disconnected = false
     @responses_mutex = Mutex.new; @socket_mutex = Mutex.new
     
     if host.instance_of?(TCPSocket)
@@ -30,10 +30,8 @@ class Legs
     @handle_data = Proc.new do |data|
       data = self.__json_restore(JSON.parse(data))
       
-      if data['method'] == '**remote__disconnecting**'
-        self.close!
-      elsif @parent and data['method']
-        @parent.__data!(data, self)
+      if data['method']
+        (@parent || self.class).__data!(data, self)
       elsif data['error'] and data['id'].nil?
         raise data['error']
       else
@@ -42,7 +40,7 @@ class Legs
     end
     
     @thread = Thread.new do
-      while connected?
+      until @socket.closed?
         begin
           self.close! if @socket.eof?
           data = nil
@@ -62,11 +60,15 @@ class Legs
   end
   
   # I think you can guess this one
-  def connected?; @socket.closed? == false and @closed == false; end
+  def connected?
+    self.class.connections.include? self
+  end
   
   # closes the connection and the threads and stuff for this user
   def close!
-    @closed = true
+    return if @disconnected == true
+    
+    @disconnected = true
     puts "User #{self.inspect} disconnecting" if self.class.log?
     
     # notify the remote side
@@ -241,7 +243,7 @@ class << Legs
       attr_reader :server, :caller
       
       # sends a notification message to all connected clients
-      def broadcast *args
+      def broadcast(*args)
         if args.first.is_a?(Array)
           list = args.shift
           method = args.shift
@@ -281,6 +283,9 @@ class << Legs
         data, from = @messages.deq
         method = data['method']; params = data['params']
         methods = @server_object.public_methods(false)
+        
+        # close dead connections
+        from.close! and next if data['method'] == '**remote__disconnecting**'
         
         begin
           raise "Supplied method is not a String" unless method.is_a?(String)
