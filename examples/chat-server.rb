@@ -2,13 +2,13 @@ require '../lib/legs'
 
 # this is a work in progress, api's will change and break, one day there will be a functional matching
 # client in shoes or something
-class User; attr_accessor :id, :name; end
 
 Legs.start do
   def initialize
     @rooms = Hash.new { {'users' => [], 'messages' => [], 'topic' => 'No topic set'} }
     @rooms['Lobby'] = {'topic' => 'General Chit Chat', 'messages' => [], 'users' => []}
   end
+  
   # returns a list of available rooms
   def rooms
     room_list = Hash.new
@@ -20,13 +20,13 @@ Legs.start do
   def join(room_name)
     unless @rooms.keys.include?(room_name)
       @rooms[room_name.to_s] = @rooms[room_name]
-      server.broadcast :room_created, room_name
+      broadcast :room_created, room_name
     end
     
 #     room = room_object(room_name)
 #     
 #     unless room['users'].include?(caller)
-#       broadcast_to room, 'user_joined', room_name, user_object(caller)
+#       broadcast room['users'], 'user_joined', room_name, user_object(caller)
 #       room['users'].push(caller)
 #     end
     
@@ -37,28 +37,29 @@ Legs.start do
   def leave(room_name)
     room = @rooms[room_name.to_s]
     room['users'].delete(caller)
-    broadcast_to room, 'user_left', room_name, user_object(caller)
+    broadcast room['users'], 'user_left', room_name, user_object(caller)
     true
   end
   
   # sets the room topic message
-  def set_topic(room, message)
-    @rooms[room.to_s]['topic'] = message.to_s
-    broadcast_to room, 'room_changed', room_object(room, :remote, :name, :topic)
+  def topic=(room, message)
+    room = @rooms[room.to_s]
+    room['topic'] = message.to_s
+    broadcast room['users'], 'room_changed', room_object(room, :remote, :name, :topic)
   end
   
   # sets the user's name
-  def set_name(name)
+  def name=(name)
     caller.meta[:name] = name.to_s
     user_rooms(caller).each do |room_name|
-      broadcast_to room_name, 'user_changed', user_object(caller)
+      broadcast @rooms[room_name]['users'], 'user_changed', user_object(caller)
     end
     true
   end
   
   # returns information about ones self, clients thusly can find out their user 'id' number
-  def get_user(object_id = nil)
-    user = user_object( object_id.nil? ? caller : users.select { |u| u.object_id == object_id.to_i }.first )
+  def user(object_id = nil)
+    user = user_object( object_id.nil? ? caller : find_user_by_object_id(object_id) }.first )
     user['rooms'] = user_rooms(user)
     return user
   end
@@ -68,7 +69,7 @@ Legs.start do
     room = room_object(room_name)
     room['messages'].push(msg = {'user' => user_object(caller), 'time' => Time.now.to_i, 'message' => message.to_s} )
     trim_messages room
-    broadcast_to room, 'message', room_name.to_s, msg
+    broadcast room['users'], 'message', room_name.to_s, msg
     return msg
   end
   
@@ -80,15 +81,6 @@ Legs.start do
     while room['messages'].length > 250
       room['messages'].shift
     end
-  end
-  
-  # sends a notification to members of a room
-  def broadcast_to room, *args
-    room = @rooms[room.to_s] if room.is_a? String
-    room['users'].each do |user|
-      user.notify! *args
-    end
-    return true
   end
   
   # makes a user object suitable for sending back with meta info and stuff

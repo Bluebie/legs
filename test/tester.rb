@@ -96,13 +96,10 @@ m = i.marshal
 puts m.a == 1 && m.b == 2 && m.c == 3 ?'Success':'Failure'
 
 puts "Testing Legs.connections"
-puts (Legs.connections(:out) == i and Legs.connections.length == 2 and Legs.connections(:in) == Legs.users.first) ?'Success':'Failure'
-puts ":in => #{Legs.connections(:in).map{ |l| l.inspect }}"
-puts ":out => #{Legs.connections(:out).map{ |l| l.inspect }}"
-puts ":both => #{Legs.connections.map{ |l| l.inspect }}"
+puts (Legs.outgoing.first == i and Legs.connections.length == 2 and Legs.incomming.length == 1) ?'Success':'Failure'
 
-puts "All: "
-ObjectSpace.each_object(Legs) { |l| puts "  #{l.inspect}" }
+puts "Testing the synced wrapping to the find_by... and broadcast methods in the server object"
+puts (Legs.find_user_by_object_id(Legs.incomming.first.__object_id) == Legs.incomming.first) ?'Success':'Failure'
 
 puts
 puts "Done"

@@ -13,10 +13,19 @@ class Legs
   def initialize(host = 'localhost', port = 30274)
     self.class.start(port) if self.class != Legs && !self.class.started?
     ObjectSpace.define_finalizer(self) { self.close! }
-    @socket = TCPSocket.new(host, port) and @parent = false if host.instance_of?(String)
-    @socket = host and @parent = port if host.instance_of?(TCPSocket)
-    @responses = Hash.new; @meta = {}; @closed = false
+    @parent = false; @responses = Hash.new; @meta = {}; @closed = false
     @responses_mutex = Mutex.new; @socket_mutex = Mutex.new
+    
+    if host.instance_of?(TCPSocket)
+      @socket = host
+      @parent = port unless port.instance_of?(Numeric)
+    elsif host.instance_of?(String)
+      @socket = TCPSocket.new(host, port)
+      self.class.outgoing_mutex.synchronize { self.class.outgoing.push self }
+    else
+      raise "First argument needs to be a hostname, ip, or socket"
+    end
+    
     
     @handle_data = Proc.new do |data|
       data = self.__json_restore(JSON.parse(data))
@@ -59,14 +68,18 @@ class Legs
   def close!
     @closed = true
     puts "User #{self.inspect} disconnecting" if self.class.log?
-    @parent.event(:disconnect, self) if @parent
     
     # notify the remote side
     notify!('**remote__disconnecting**') rescue nil
     
-    @parent.users_mutex.synchronize { @parent.users.delete(self) } if @parent
+    if @parent
+      @parent.event(:disconnect, self)
+      @parent.incomming_mutex.synchronize { @parent.incomming.delete(self) }
+    else
+      self.class.outgoing_mutex.synchronize { self.class.outgoing.delete(self) }
+    end
     
-    @socket.close rescue nil
+    Thread.new { sleep(1); @socket.close rescue nil }
   end
   
   # send a notification to this user
@@ -203,13 +216,14 @@ end
 # the server is started by subclassing Legs, then SubclassName.start
 class << Legs
   attr_accessor :terminator, :log
-  attr_reader :users, :server_object, :users_mutex, :messages_mutex
+  attr_reader :incomming, :outgoing, :server_object, :incomming_mutex, :outgoing_mutex, :messages_mutex
   alias_method :log?, :log
+  alias_method :users, :incomming
   
   def initializer
     ObjectSpace.define_finalizer(self) { self.stop! }
-    @users = []; @messages = Queue.new; @terminator = "\n"; @log = true
-    @users_mutex = Mutex.new
+    @incomming = []; @outgoing = []; @messages = Queue.new; @terminator = "\n"; @log = true
+    @incomming_mutex = Mutex.new; @outgoing_mutex = Mutex.new
   end
   
   
@@ -222,7 +236,38 @@ class << Legs
     
     # make the fake class
     @server_class = Class.new
-    @server_class.module_eval { private; attr_reader :server, :caller; public }
+    @server_class.module_eval do
+      private
+      attr_reader :server, :caller
+      
+      # sends a notification message to all connected clients
+      def broadcast *args
+        if args.first.is_a?(Array)
+          arr = args.shift; method = args.shift
+        elsif args.first.is_a?(String) or args.first.is_a?(Symbol)
+          arr = server.incomming; method = args.shift
+        else
+          raise "You need to specify a 'method' to broadcast out to"
+        end
+        
+        server.incomming.each { |user| user.notify!(method, *args) }
+      end
+      
+      # Finds a user by the value of a certain property... like find_user_by :object_id, 12345
+      def find_user_by_object_id value
+        server.incomming.find { |user| user.__object_id == value }
+      end
+      
+      # finds user's with the specified meta keys matching the specified values, can use regexps and stuff, like a case block
+      def find_users_by_meta hash = nil
+        raise "You need to give find_users_by_meta a hash to check the user's meta hash against" if hash.nil?
+        server.incomming.select do |user|
+          hash.all? { |key, value| value === user.meta[key] }
+        end
+      end
+      
+      public # makes it public again for the user code
+    end
     @server_class.module_eval(&blk)
     @server_object = @server_class.allocate
     @server_object.instance_variable_set(:@server, self)
@@ -246,7 +291,7 @@ class << Legs
           
           result = nil
           
-          @users_mutex.synchronize do
+          @incomming_mutex.synchronize do
             if methods.include?(method.to_s)
               result = @server_object.__send__(method.to_s, *params)
             else
@@ -271,8 +316,8 @@ class << Legs
       @acceptor_thread = Thread.new do
         while started?
           user = Legs.new(@listener.accept, self)
-          @users_mutex.synchronize { @users.push user }
-          puts "User #{user.object_id} connected, number of users: #{@users.length}" if log?
+          @incomming_mutex.synchronize { @incomming.push user }
+          puts "User #{user.object_id} connected, number of users: #{@incomming.length}" if log?
           self.event :connect, user
         end
       end
@@ -282,34 +327,12 @@ class << Legs
   # stops the server, disconnects the clients
   def stop
     @started = false
-    @users.each { |user| user.close! }
+    @incomming.each { |user| user.close! }
   end
   
-  # sends a notification message to all connected clients
-  def broadcast(method, *args)
-    @users.each { |user| user.notify!(method, *args) }
-  end
-  
-  # Finds a user by the value of a certain property... like find_user_by :object_id, 12345
-  def find_user_by property, value
-    @users.find { |user| user.__send(property) == value }
-  end
-  
-  def find_users_by property, *values
-    @users.select { |user| user.__send(property) == value }
-  end
-  
-  # gives you an array of all the instances of Legs which are still connected
-  # direction can be :both, :in, or :out
-  def connections direction = :both
-    return @users if direction == :in
-    list = Array.new
-    ObjectSpace.each_object(self) do |leg|
-      next if list.include?(leg) unless leg.connected?
-      next unless leg.parent == false if direction == :out
-      list.push leg
-    end
-    return list
+  # returns an array of all connections
+  def connections
+    @incomming + @outgoing
   end
   
   # add an event call to the server's message queue
@@ -332,6 +355,15 @@ class << Legs
     client = Legs.new(*args)
     blk[client]
     client.close!
+  end
+  
+  # hooks up these methods so you can use them off the main object too!
+  [:broadcast, :find_user_by_object_id, :find_users_by_meta].each do |name|
+    define_method name do |*args|
+      @incomming_mutex.synchronize do
+        @server_object.__send__(name, *args)
+      end
+    end
   end
 end
 
