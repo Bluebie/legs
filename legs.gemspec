@@ -1,7 +1,7 @@
 Gem::Specification.new do |s|
   s.name = "legs"
-  s.version = "0.5"
-  s.date = "2008-07-09"
+  s.version = "0.6"
+  s.date = "2008-07-12"
   s.summary = "Simple fun open networking for newbies and quick hacks"
   s.email = "blue@creativepony.com"
   s.homepage = "http://github.com/Bluebie/legs"

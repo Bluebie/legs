@@ -13,19 +13,22 @@ class Legs
   def initialize(host = 'localhost', port = 30274)
     self.class.start(port) if self.class != Legs && !self.class.started?
     ObjectSpace.define_finalizer(self) { self.close! }
-    @socket = TCPSocket.new(host, port) if host.instance_of?(String)
+    @socket = TCPSocket.new(host, port) and @parent = false if host.instance_of?(String)
     @socket = host and @parent = port if host.instance_of?(TCPSocket)
-    @responses = {}; @meta = {}; @parent ||= self.class
+    @responses = Hash.new; @meta = {}; @closed = false
+    @responses_mutex = Mutex.new; @socket_mutex = Mutex.new
     
     @handle_data = Proc.new do |data|
       data = self.__json_restore(JSON.parse(data))
       
-      if @parent and data['method']
+      if data['method'] == '**remote__disconnecting**'
+        self.close!
+      elsif @parent and data['method']
         @parent.__data!(data, self)
       elsif data['error'] and data['id'].nil?
         raise data['error']
       else
-        @responses[data['id']] = data
+        @responses_mutex.synchronize { @responses[data['id']] = data }
       end
     end
     
@@ -33,7 +36,13 @@ class Legs
       while connected?
         begin
           self.close! if @socket.eof?
-          @handle_data[@socket.gets(self.class.terminator)]
+          data = nil
+          @socket_mutex.synchronize { data = @socket.gets(self.class.terminator) }
+          if data.nil?
+            self.close!
+          else
+            @handle_data[data]
+          end
         rescue JSON::ParserError => e
           self.send_data!({"error" => "JSON provided is invalid. See http://json.org/ to see how to format correctly."})
         rescue IOError => e
@@ -44,15 +53,20 @@ class Legs
   end
   
   # I think you can guess this one
-  def connected?; !@socket.closed?; end
+  def connected?; @socket.closed? == false and @closed == false; end
   
   # closes the connection and the threads and stuff for this user
   def close!
-    return unless connected?
+    @closed = true
     puts "User #{self.inspect} disconnecting" if self.class.log?
-    @parent.server_object.on_disconnect(self) if @parent and @parent.server_object.respond_to? :on_disconnect
-    @socket.close 
-    @parent.users.delete(self) if @parent
+    @parent.event(:disconnect, self) if @parent
+    
+    # notify the remote side
+    notify!('**remote__disconnecting**') rescue nil
+    
+    @parent.users_mutex.synchronize { @parent.users.delete(self) } if @parent
+    
+    @socket.close rescue nil
   end
   
   # send a notification to this user
@@ -67,11 +81,11 @@ class Legs
     id = self.__get_unique_number
     self.send_data! 'method' => method.to_s, 'params' => args, 'id' => id
     
-    while @responses.keys.include?(id) == false
+    while @responses_mutex.synchronize { @responses.keys.include?(id) } == false
       sleep(0.01)
     end
     
-    data = @responses.delete(id)
+    data = @responses_mutex.synchronize { @responses.delete(id) }
     
     error = data['error']
     raise error unless error.nil?
@@ -81,6 +95,10 @@ class Legs
     return data['result']
   end
   
+  def inspect
+    "<Legs:#{__object_id} Meta: #{@meta.inspect}>"
+  end
+  
   # does an async request which calls a block when response arrives
   def send_async!(method, *args, &blk)
     puts "Call #{self.__inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.__class.log?
@@ -88,12 +106,12 @@ class Legs
     self.send_data! 'method' => method.to_s, 'params' => args, 'id' => id
     
     Thread.new do
-      while @responses.keys.include?(id) == false
+      while @responses_mutex.synchronize { @responses.keys.include?(id) } == false
         sleep(0.05)
       end
       
-      data = @responses.delete(id)
-      puts ">> #{method} #=> #{data['result'].inspect}" if self.__class.log?
+      data = @responses_mutex.synchronize { @responses.delete(id) }
+      puts ">> #{method} #=> #{data['result'].inspect}" if self.__class.log? unless data['error']
       blk[Legs::AsyncData.new(data)]
     end
   end
@@ -101,7 +119,7 @@ class Legs
   # maps undefined methods in to rpc calls
   def method_missing(method, *args)
     return self.send(method, *args) if method.to_s =~ /^__/
-    send! method, *args
+    send!(method, *args)
   end
   
   # hacks the send method so ancestor methods instead become rpc calls too
@@ -115,8 +133,7 @@ class Legs
   # sends raw object over the socket
   def send_data!(data)
     raise "Lost remote connection" unless connected?
-    message = JSON.generate(__json_marshal(data)) + self.__class.terminator
-    @socket.write(message)
+    @socket_mutex.synchronize { @socket.write(JSON.generate(__json_marshal(data)) + self.__class.terminator) }
   end
   
   
@@ -186,12 +203,13 @@ end
 # the server is started by subclassing Legs, then SubclassName.start
 class << Legs
   attr_accessor :terminator, :log
-  attr_reader :users, :server_object
+  attr_reader :users, :server_object, :users_mutex, :messages_mutex
   alias_method :log?, :log
   
   def initializer
     ObjectSpace.define_finalizer(self) { self.stop! }
-    @users = []; @messages = []; @terminator = "\n"; @log = true
+    @users = []; @messages = Queue.new; @terminator = "\n"; @log = true
+    @users_mutex = Mutex.new
   end
   
   
@@ -213,23 +231,27 @@ class << Legs
     @message_processor = Thread.new do
       while started?
         sleep(0.01) and next if @messages.empty?
-        data, from = @messages.shift
+        data, from = @messages.deq
         method = data['method']; params = data['params']
         methods = @server_object.public_methods(false)
         
         begin
           raise "Supplied method is not a String" unless method.is_a?(String)
           raise "Supplied params object is not an Array" unless params.is_a?(Array)
-          raise "Cannot run '#{method}' because it is not defined in this server" unless methods.include?(method.to_s) or methods.include?('method_missing')
+          raise "Cannot run '#{method}' because it is not defined in this server" unless methods.include?(method.to_s) or methods.include? :method_missing
           
           puts "Call #{method}(#{params.map { |i| i.inspect }.join(', ')})" if log?
           
           @server_object.instance_variable_set(:@caller, from)
           
-          if methods.include?(method.to_s)
-            result = @server_object.__send__(method.to_s, *params)
-          else
-            result = @server_object.instance_eval { method_missing(method.to_s, *params) }
+          result = nil
+          
+          @users_mutex.synchronize do
+            if methods.include?(method.to_s)
+              result = @server_object.__send__(method.to_s, *params)
+            else
+              result = @server_object.method_missing(method.to_s, *params)
+            end
           end
           
           puts ">> #{method} #=> #{result.inspect}" if log?
@@ -237,7 +259,7 @@ class << Legs
           from.send_data!({'id' => data['id'], 'result' => result}) unless data['id'].nil?
           
         rescue Exception => e
-          from.send_data!({'error' => e.to_s, 'id' => data['id']}) unless data['id'].nil?
+          from.send_data!({'error' => e, 'id' => data['id']}) unless data['id'].nil?
           puts "Backtrace: \n" + e.backtrace.map { |i| "   #{i}" }.join("\n") if log?
         end
       end
@@ -248,9 +270,10 @@ class << Legs
       
       @acceptor_thread = Thread.new do
         while started?
-          @users.push(user = Legs.new(@listener.accept, self))
+          user = Legs.new(@listener.accept, self)
+          @users_mutex.synchronize { @users.push user }
           puts "User #{user.object_id} connected, number of users: #{@users.length}" if log?
-          @server_object.on_connect(user) if @server_object.respond_to? :on_connect
+          self.event :connect, user
         end
       end
     end
@@ -277,23 +300,34 @@ class << Legs
   end
   
   # gives you an array of all the instances of Legs which are still connected
-  def instances
+  # direction can be :both, :in, or :out
+  def connections direction = :both
+    return @users if direction == :in
     list = Array.new
     ObjectSpace.each_object(self) do |leg|
-      list.push leg if leg.connected?
+      next if list.include?(leg) unless leg.connected?
+      next unless leg.parent == false if direction == :out
+      list.push leg
     end
     return list
   end
   
+  # add an event call to the server's message queue
+  def event(name, sender, *extras)
+    return unless @server_object.respond_to?("on_#{name}")
+    __data!({'method' => "on_#{name}", 'params' => extras.to_a, 'id' => nil}, sender)
+  end
+  
   # gets called to handle all incomming messages (RPC requests)
   def __data!(data, from)
-    @messages.push([data, from])
+    @messages.enq [data, from]
   end
   
   # returns true if server is running
   def started?; @started; end
   
   # creates a legs client, and passes it to supplied block, closes client after block finishes running
+  # I wouldn't have added this method to keep shoes small, but users insist comedic value makes it worthwhile
   def open(*args, &blk)
     client = Legs.new(*args)
     blk[client]
@@ -312,3 +346,6 @@ class Legs::AsyncData
   end
   alias_method :value, :result
 end
+
+class Legs::StartBlockError < StandardError; end
+class Legs::RequestError < StandardError; end

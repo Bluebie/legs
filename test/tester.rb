@@ -31,11 +31,20 @@ Legs.start(6425) do
     obj.a = 1; obj.b = 2; obj.c = 3
     return obj
   end
+  
+  def on_disconnect
+    puts "#{caller.inspect} disconnected"
+  end
+  
+  def on_connect
+    $server_instance = caller
+  end
 end
 
 ## connects and tests a bunch of things
 puts "Testing syncronous echo"
 i = Legs.new('localhost',6425)
+i.meta[:name] = 'first tester client'
 puts i.echo('Hello World') == 'Hello World' ?"Success":"Failure"
 
 puts "Testing Count"
@@ -43,12 +52,20 @@ puts i.count==1 && i.count == 2 && i.count == 3 ?'Success':'Failure'
 
 puts "Testing count resets correctly"
 ii = Legs.new('localhost',6425)
+ii.meta[:name] = 'second tester client'
 puts ii.count == 1 && ii.count == 2 && ii.count == 3 ?'Success':'Failure'
 ii.close!
+
+sleep(0.5)
+puts "Testing disconnection went well"
+puts ii.connected? == false && $server_instance.connected? == false ?'Success':'Failure'
+
 ii = nil
+ObjectSpace.garbage_collect
 
 puts "Testing server disconnect worked correctly"
-puts Legs.users.length == 1 ?'Success':'Failure'
+sleep(0.5)
+puts Legs.users.length == 1 ?'Success':"Failure: #{Legs.users.length}"
 
 puts "Testing async call..."
 i.send_async!(:echo, 'Testing') do |r|
@@ -71,12 +88,21 @@ puts "Testing regular error"
 v = i.error rescue :good
 puts v == :good ?'Success':'Failure'
 
-puts "testing notify!"
+puts "Testing notify!"
 i.test_notify
 
-puts "testing marshalling"
+puts "Testing marshalling"
 m = i.marshal
 puts m.a == 1 && m.b == 2 && m.c == 3 ?'Success':'Failure'
+
+puts "Testing Legs.connections"
+puts (Legs.connections(:out) == i and Legs.connections.length == 2 and Legs.connections(:in) == Legs.users.first) ?'Success':'Failure'
+puts ":in => #{Legs.connections(:in).map{ |l| l.inspect }}"
+puts ":out => #{Legs.connections(:out).map{ |l| l.inspect }}"
+puts ":both => #{Legs.connections.map{ |l| l.inspect }}"
+
+puts "All: "
+ObjectSpace.each_object(Legs) { |l| puts "  #{l.inspect}" }
 
 puts
 puts "Done"
