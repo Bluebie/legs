@@ -190,7 +190,7 @@ class Legs
           
           instance = object_class.allocate
           object.each_pair do |key, value|
-            instance.instance_variable_setincoming
+            instance.instance_variable_set("@#{key}", self.__json_restore(value))
           end
           return instance
         else

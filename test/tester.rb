@@ -96,10 +96,10 @@ m = i.marshal
 puts m.a == 1 && m.b == 2 && m.c == 3 ?'Success':'Failure'
 
 puts "Testing Legs.connections"
-puts (Legs.outgoing.first == i and Legs.connections.length == 2 and Legs.incomming.length == 1) ?'Success':'Failure'
+puts (Legs.outgoing.first == i and Legs.connections.length == 2 and Legs.incoming.length == 1) ?'Success':'Failure'
 
 puts "Testing the synced wrapping to the find_by... and broadcast methods in the server object"
-puts (Legs.find_user_by_object_id(Legs.incomming.first.__object_id) == Legs.incomming.first) ?'Success':'Failure'
+puts (Legs.find_user_by_object_id(Legs.incoming.first.__object_id) == Legs.incoming.first) ?'Success':'Failure'
 
 puts "Testing broadcast"
 Legs.broadcast :test_notify
