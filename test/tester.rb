@@ -101,5 +101,9 @@ puts (Legs.outgoing.first == i and Legs.connections.length == 2 and Legs.incommi
 puts "Testing the synced wrapping to the find_by... and broadcast methods in the server object"
 puts (Legs.find_user_by_object_id(Legs.incomming.first.__object_id) == Legs.incomming.first) ?'Success':'Failure'
 
+puts "Testing broadcast"
+Legs.broadcast :test_notify
+sleep(0.5)
+
 puts
 puts "Done"

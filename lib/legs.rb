@@ -74,7 +74,7 @@ class Legs
     
     if @parent
       @parent.event(:disconnect, self)
-      @parent.incomming_mutex.synchronize { @parent.incomming.delete(self) }
+      @parent.incoming_mutex.synchronize { @parent.incoming.delete(self) }
     else
       self.class.outgoing_mutex.synchronize { self.class.outgoing.delete(self) }
     end
@@ -190,7 +190,7 @@ class Legs
           
           instance = object_class.allocate
           object.each_pair do |key, value|
-            instance.instance_variable_set("@#{key}", self.__json_restore(value))
+            instance.instance_variable_setincoming
           end
           return instance
         else
@@ -216,14 +216,14 @@ end
 # the server is started by subclassing Legs, then SubclassName.start
 class << Legs
   attr_accessor :terminator, :log
-  attr_reader :incomming, :outgoing, :server_object, :incomming_mutex, :outgoing_mutex, :messages_mutex
+  attr_reader :incoming, :outgoing, :server_object, :incoming_mutex, :outgoing_mutex, :messages_mutex
   alias_method :log?, :log
-  alias_method :users, :incomming
+  alias_method :users, :incoming
   
   def initializer
     ObjectSpace.define_finalizer(self) { self.stop! }
-    @incomming = []; @outgoing = []; @messages = Queue.new; @terminator = "\n"; @log = true
-    @incomming_mutex = Mutex.new; @outgoing_mutex = Mutex.new
+    @incoming = []; @outgoing = []; @messages = Queue.new; @terminator = "\n"; @log = true
+    @incoming_mutex = Mutex.new; @outgoing_mutex = Mutex.new
   end
   
   
@@ -243,25 +243,27 @@ class << Legs
       # sends a notification message to all connected clients
       def broadcast *args
         if args.first.is_a?(Array)
-          arr = args.shift; method = args.shift
+          list = args.shift
+          method = args.shift
         elsif args.first.is_a?(String) or args.first.is_a?(Symbol)
-          arr = server.incomming; method = args.shift
+          list = server.incoming
+          method = args.shift
         else
           raise "You need to specify a 'method' to broadcast out to"
         end
         
-        server.incomming.each { |user| user.notify!(method, *args) }
+        list.each { |user| user.notify!(method, *args) }
       end
       
       # Finds a user by the value of a certain property... like find_user_by :object_id, 12345
       def find_user_by_object_id value
-        server.incomming.find { |user| user.__object_id == value }
+        server.incoming.find { |user| user.__object_id == value }
       end
       
       # finds user's with the specified meta keys matching the specified values, can use regexps and stuff, like a case block
       def find_users_by_meta hash = nil
         raise "You need to give find_users_by_meta a hash to check the user's meta hash against" if hash.nil?
-        server.incomming.select do |user|
+        server.incoming.select do |user|
           hash.all? { |key, value| value === user.meta[key] }
         end
       end
@@ -291,7 +293,7 @@ class << Legs
           
           result = nil
           
-          @incomming_mutex.synchronize do
+          @incoming_mutex.synchronize do
             if methods.include?(method.to_s)
               result = @server_object.__send__(method.to_s, *params)
             else
@@ -316,8 +318,8 @@ class << Legs
       @acceptor_thread = Thread.new do
         while started?
           user = Legs.new(@listener.accept, self)
-          @incomming_mutex.synchronize { @incomming.push user }
-          puts "User #{user.object_id} connected, number of users: #{@incomming.length}" if log?
+          @incoming_mutex.synchronize { @incoming.push user }
+          puts "User #{user.object_id} connected, number of users: #{@incoming.length}" if log?
           self.event :connect, user
         end
       end
@@ -327,12 +329,12 @@ class << Legs
   # stops the server, disconnects the clients
   def stop
     @started = false
-    @incomming.each { |user| user.close! }
+    @incoming.each { |user| user.close! }
   end
   
   # returns an array of all connections
   def connections
-    @incomming + @outgoing
+    @incoming + @outgoing
   end
   
   # add an event call to the server's message queue
@@ -341,7 +343,7 @@ class << Legs
     __data!({'method' => "on_#{name}", 'params' => extras.to_a, 'id' => nil}, sender)
   end
   
-  # gets called to handle all incomming messages (RPC requests)
+  # gets called to handle all incoming messages (RPC requests)
   def __data!(data, from)
     @messages.enq [data, from]
   end
@@ -360,7 +362,7 @@ class << Legs
   # hooks up these methods so you can use them off the main object too!
   [:broadcast, :find_user_by_object_id, :find_users_by_meta].each do |name|
     define_method name do |*args|
-      @incomming_mutex.synchronize do
+      @incoming_mutex.synchronize do
         @server_object.__send__(name, *args)
       end
     end
