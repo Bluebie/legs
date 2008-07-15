@@ -1,13 +1,11 @@
-# Legs take you places, a networking companion to Shoes
-require 'rubygems'
+# Legs take you places, a networking companion
+['rubygems', 'socket', 'thread'].each { |i| require i }
 require 'json' unless self.class.const_defined? 'JSON'
-require 'socket'
-require 'thread'
-
-Thread.abort_on_exception = true # Should be able to run without this, hopefully. Helps with debugging though
 
 class Legs
+  # general getters
   attr_reader :socket, :parent, :meta
+  def inspect; "<Legs:#{object_id} Meta: #{@meta.inspect}>"; end
   
   # Legs.new for a client, subclass to make a server, .new then makes server and client!
   def initialize(host = 'localhost', port = 30274)
@@ -28,7 +26,7 @@ class Legs
     
     
     @handle_data = Proc.new do |data|
-      data = self.__json_restore(JSON.parse(data))
+      data = json_restore(JSON.parse(data))
       
       if data['method']
         (@parent || self.class).__data!(data, self)
@@ -42,34 +40,32 @@ class Legs
     @thread = Thread.new do
       until @socket.closed?
         begin
-          self.close! if @socket.eof?
+          close! if @socket.eof?
           data = nil
-          @socket_mutex.synchronize { data = @socket.gets(self.class.terminator) }
+          @socket_mutex.synchronize { data = @socket.gets(self.class.terminator) rescue nil }
           if data.nil?
-            self.close!
+            close!
           else
             @handle_data[data]
           end
         rescue JSON::ParserError => e
-          self.send_data!({"error" => "JSON provided is invalid. See http://json.org/ to see how to format correctly."})
+          send_data!({"error" => "JSON provided is invalid. See http://json.org/ to see how to format correctly."})
         rescue IOError => e
-          self.close!
+          close!
         end
       end
     end
   end
   
   # I think you can guess this one
-  def connected?
-    self.class.connections.include? self
-  end
+  def connected?; self.class.connections.include?(self); end
   
   # closes the connection and the threads and stuff for this user
   def close!
     return if @disconnected == true
     
     @disconnected = true
-    puts "User #{self.inspect} disconnecting" if self.class.log?
+    puts "User #{inspect} disconnecting" if self.class.log?
     
     # notify the remote side
     notify!('**remote__disconnecting**') rescue nil
@@ -85,70 +81,37 @@ class Legs
   end
   
   # send a notification to this user
-  def notify!(method, *args)
-    puts "Notify #{self.__inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.__class.log?
-    self.__send_data!({'method' => method.to_s, 'params' => args, 'id' => nil})
+  def notify!(method, *args, &blk)
+    puts "Notify #{inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.class.log?
+    send_data!({'method' => method.to_s, 'params' => args, 'id' => nil})
   end
   
   # sends a normal RPC request that has a response
-  def send!(method, *args)
-    puts "Call #{self.__inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.__class.log?
-    id = self.__get_unique_number
-    self.send_data! 'method' => method.to_s, 'params' => args, 'id' => id
+  def send!(method, *args, &blk)
+    puts "Call #{inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.class.log?
+    id = get_unique_number
+    send_data! 'method' => method.to_s, 'params' => args, 'id' => id
     
-    while @responses_mutex.synchronize { @responses.keys.include?(id) } == false
-      sleep(0.01)
-    end
-    
-    data = @responses_mutex.synchronize { @responses.delete(id) }
-    
-    error = data['error']
-    raise error unless error.nil?
-    
-    puts ">> #{method} #=> #{data['result'].inspect}" if self.__class.log?
-    
-    return data['result']
-  end
-  
-  def inspect
-    "<Legs:#{__object_id} Meta: #{@meta.inspect}>"
-  end
-  
-  # does an async request which calls a block when response arrives
-  def send_async!(method, *args, &blk)
-    puts "Call #{self.__inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.__class.log?
-    id = self.__get_unique_number
-    self.send_data! 'method' => method.to_s, 'params' => args, 'id' => id
-    
-    Thread.new do
-      while @responses_mutex.synchronize { @responses.keys.include?(id) } == false
-        sleep(0.05)
-      end
+    worker = Proc.new do
+      sleep 0.1 until @responses_mutex.synchronize { @responses.keys.include?(id) }
       
-      data = @responses_mutex.synchronize { @responses.delete(id) }
-      puts ">> #{method} #=> #{data['result'].inspect}" if self.__class.log? unless data['error']
-      blk[Legs::AsyncData.new(data)]
+      result = Legs::Result.new(@responses_mutex.synchronize { @responses.delete(id) })
+      puts ">> #{method} #=> #{result.data['result'].inspect}" if self.class.log?
+      result
     end
+    
+    if blk.respond_to?(:call); Thread.new { blk[worker.call] }
+    else; worker.call.value; end
   end
   
-  # maps undefined methods in to rpc calls
-  def method_missing(method, *args)
-    return self.send(method, *args) if method.to_s =~ /^__/
-    send!(method, *args)
-  end
+  # catch all the rogue calls and make them work niftily
+  alias_method :method_missing, :send!
   
-  # hacks the send method so ancestor methods instead become rpc calls too
-  # if you want to use a method in a Legs superclass, prefix with __
-  def send(method, *args)
-    return super(method.to_s.sub(/^__/, ''), *args) if method.to_s =~ /^__/
-    return super(method, *args) if self.__public_methods(false).include?(method)
-    super('send!', method.to_s, *args)
-  end
-
   # sends raw object over the socket
   def send_data!(data)
     raise "Lost remote connection" unless connected?
-    @socket_mutex.synchronize { @socket.write(JSON.generate(__json_marshal(data)) + self.__class.terminator) }
+    raw = JSON.generate(json_marshal(data)) + self.class.terminator
+    @socket_mutex.synchronize { @socket.write(raw) }
   end
   
   
@@ -161,17 +124,19 @@ class Legs
       return object
     when Hash
       out = Hash.new
-      object.each_pair { |k,v| out[k.to_s] = __json_marshal(v) }
+      object.each_pair { |k,v| out[k.to_s] = json_marshal(v) }
       return out
     when Array
-      return object.map { |v| __json_marshal(v) }
+      return object.map { |v| json_marshal(v) }
+    when Exception
+      return {'__jsonclass__' => ['RemoteError', "<#{object.class.name}> #{object.message}", object.backtrace]}
     else
-      return {'__jsonclass__' => [object.class.name, object._dump]} if object.respond_to?(:_dump)
+      return {'__jsonclass__' => [object.class.name, '**_dump**', object._dump]} if object.respond_to?(:_dump)
       
       # the default marshalling behaviour
       instance_vars = {}
       object.instance_variables.each do |var_name|
-        instance_vars[var_name.to_s.sub(/@/, '')] = self.__json_marshal(object.instance_variable_get(var_name))
+        instance_vars[var_name.to_s.sub(/@/, '')] = json_marshal(object.instance_variable_get(var_name))
       end
       
       return {'__jsonclass__' => [object.class.name]}.merge(instance_vars)
@@ -188,11 +153,16 @@ class Legs
         object_class = Module.const_get(class_name) rescue false
         
         if object_class.name == class_name
-          return object_class._load(*constructor) if object_class.respond_to?(:_load) unless constructor.empty?
+          return object_class._load(constructor.last) if object_class.respond_to?(:_load) and constructor.first == '**_dump**'
           
-          instance = object_class.allocate
+          if constructor.empty?
+            instance = object_class.allocate
+          else
+            instance = object_class.new(*constructor)
+          end
+          
           object.each_pair do |key, value|
-            instance.instance_variable_set("@#{key}", self.__json_restore(value))
+            instance.instance_variable_set("@#{key}", json_restore(value))
           end
           return instance
         else
@@ -200,11 +170,11 @@ class Legs
         end
       else
         hash = Hash.new
-        object.each_pair { |k,v| hash[k] = self.__json_restore(v) }
+        object.each_pair { |k,v| hash[k] = json_restore(v) }
         return hash
       end
     when Array
-      return object.map { |i| self.__json_restore(i) }
+      return object.map { |i| json_restore(i) }
     else
       return object
     end
@@ -214,6 +184,12 @@ class Legs
   def get_unique_number; @unique_id ||= 0; @unique_id += 1; end
 end
 
+# undef's the superclass's methods so they won't get in the way
+removal_list = Legs.instance_methods(true)
+removal_list -= %w{JSON new class object_id send __send__ __id__ < <= <=> => > == === yield raise}
+removal_list -= Legs.instance_methods(false)
+Legs.class_eval { removal_list.each { |m| undef_method m } }
+
 
 # the server is started by subclassing Legs, then SubclassName.start
 class << Legs
@@ -221,10 +197,11 @@ class << Legs
   attr_reader :incoming, :outgoing, :server_object, :incoming_mutex, :outgoing_mutex, :messages_mutex
   alias_method :log?, :log
   alias_method :users, :incoming
+  def started?; @started; end
   
   def initializer
     ObjectSpace.define_finalizer(self) { self.stop! }
-    @incoming = []; @outgoing = []; @messages = Queue.new; @terminator = "\n"; @log = true
+    @incoming = []; @outgoing = []; @messages = Queue.new; @terminator = "\n"; @log = false
     @incoming_mutex = Mutex.new; @outgoing_mutex = Mutex.new
   end
   
@@ -232,8 +209,8 @@ class << Legs
   # starts the server, pass nil for port to make a 'server' that doesn't actually accept connections
   # This is useful for adding methods to Legs so that systems you connect to can call methods back on you
   def start(port=30274, &blk)
-    return if started?
-    raise "Legs.start requires a block" unless blk
+    @server_class.module_eval(&blk) and return if started?
+    raise "Legs.start requires a block" unless block_given?
     @started = true
     
     # make the fake class
@@ -259,7 +236,7 @@ class << Legs
       
       # Finds a user by the value of a certain property... like find_user_by :object_id, 12345
       def find_user_by_object_id value
-        server.incoming.find { |user| user.__object_id == value }
+        server.incoming.find { |user| user.object_id == value }
       end
       
       # finds user's with the specified meta keys matching the specified values, can use regexps and stuff, like a case block
@@ -279,40 +256,43 @@ class << Legs
     
     @message_processor = Thread.new do
       while started?
-        sleep(0.01) and next if @messages.empty?
+        sleep 0.01 while @messages.empty?
         data, from = @messages.deq
         method = data['method']; params = data['params']
         methods = @server_object.public_methods(false)
         
         # close dead connections
-        from.close! and next if data['method'] == '**remote__disconnecting**'
-        
-        begin
-          raise "Supplied method is not a String" unless method.is_a?(String)
-          raise "Supplied params object is not an Array" unless params.is_a?(Array)
-          raise "Cannot run '#{method}' because it is not defined in this server" unless methods.include?(method.to_s) or methods.include? :method_missing
-          
-          puts "Call #{method}(#{params.map { |i| i.inspect }.join(', ')})" if log?
-          
-          @server_object.instance_variable_set(:@caller, from)
-          
-          result = nil
-          
-          @incoming_mutex.synchronize do
-            if methods.include?(method.to_s)
-              result = @server_object.__send__(method.to_s, *params)
-            else
-              result = @server_object.method_missing(method.to_s, *params)
+        if data['method'] == '**remote__disconnecting**'
+          from.close!
+          next
+        else
+          begin
+            raise "Supplied method is not a String" unless method.is_a?(String)
+            raise "Supplied params object is not an Array" unless params.is_a?(Array)
+            raise "Cannot run '#{method}' because it is not defined in this server" unless methods.include?(method.to_s) or methods.include? :method_missing
+            
+            puts "Call #{method}(#{params.map { |i| i.inspect }.join(', ')})" if log?
+            
+            @server_object.instance_variable_set(:@caller, from)
+            
+            result = nil
+            
+            @incoming_mutex.synchronize do
+              if methods.include?(method.to_s)
+                result = @server_object.__send__(method.to_s, *params)
+              else
+                result = @server_object.method_missing(method.to_s, *params)
+              end
             end
+            
+            puts ">> #{method} #=> #{result.inspect}" if log?
+            
+            from.send_data!({'id' => data['id'], 'result' => result}) unless data['id'].nil?
+            
+          rescue Exception => e
+            from.send_data!({'error' => e, 'id' => data['id']}) unless data['id'].nil?
+            puts "Error: #{e}\nBacktrace: " + e.backtrace.join("\n   ") if log?
           end
-          
-          puts ">> #{method} #=> #{result.inspect}" if log?
-          
-          from.send_data!({'id' => data['id'], 'result' => result}) unless data['id'].nil?
-          
-        rescue Exception => e
-          from.send_data!({'error' => e, 'id' => data['id']}) unless data['id'].nil?
-          puts "Backtrace: \n" + e.backtrace.map { |i| "   #{i}" }.join("\n") if log?
         end
       end
     end
@@ -353,14 +333,10 @@ class << Legs
     @messages.enq [data, from]
   end
   
-  # returns true if server is running
-  def started?; @started; end
-  
-  # creates a legs client, and passes it to supplied block, closes client after block finishes running
-  # I wouldn't have added this method to keep shoes small, but users insist comedic value makes it worthwhile
-  def open(*args, &blk)
+  # People say this syntax is too funny not to have... whatever. Works like IO and File and what have you
+  def open(*args)
     client = Legs.new(*args)
-    blk[client]
+    yield(client)
     client.close!
   end
   
@@ -376,15 +352,25 @@ end
 
 Legs.initializer
 
-
-class Legs::AsyncData
+# represents the data response, handles throwing of errors and stuff
+class Legs::Result
+  attr_reader :data
   def initialize(data); @data = data; end
   def result
-    @errored = true and raise @data['error'] if @data['error'] unless @errored
-    return @data['result']
+    unless @data['error'].nil? or @errored
+      @errored = true
+      raise @data['error']
+    end
+    @data['result']
   end
   alias_method :value, :result
 end
 
 class Legs::StartBlockError < StandardError; end
 class Legs::RequestError < StandardError; end
+class RemoteError < StandardError
+  def initialize(msg, backtrace)
+    super(msg)
+    set_backtrace(backtrace)
+  end
+end
