@@ -82,13 +82,13 @@ class Legs
   
   # send a notification to this user
   def notify!(method, *args, &blk)
-    puts "Notify #{inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.class.log?
+    puts "Notify #{inspect}: #{method}(#{args.map(&:inspect).join(', ')})" if self.class.log?
     send_data!({'method' => method.to_s, 'params' => args, 'id' => nil})
   end
   
   # sends a normal RPC request that has a response
   def send!(method, *args, &blk)
-    puts "Call #{inspect}: #{method}(#{args.map { |i| i.inspect }.join(', ')})" if self.class.log?
+    puts "Call #{inspect}: #{method}(#{args.map(&:inspect).join(', ')})" if self.class.log?
     id = get_unique_number
     send_data! 'method' => method.to_s, 'params' => args, 'id' => id
     
@@ -128,10 +128,12 @@ class Legs
       return out
     when Array
       return object.map { |v| json_marshal(v) }
+    when Symbol
+      return {'__jsonclass__' => ['Legs', '__make_symbol', object.to_s]}
     when Exception
-      return {'__jsonclass__' => ['RemoteError', "<#{object.class.name}> #{object.message}", object.backtrace]}
+      return {'__jsonclass__' => ['Legs::RemoteError', 'new', "<#{object.class.name}> #{object.message}", object.backtrace]}
     else
-      return {'__jsonclass__' => [object.class.name, '**_dump**', object._dump]} if object.respond_to?(:_dump)
+      return {'__jsonclass__' => [object.class.name, '_load', object._dump]} if object.respond_to?(:_dump)
       
       # the default marshalling behaviour
       instance_vars = {}
@@ -139,9 +141,11 @@ class Legs
         instance_vars[var_name.to_s.sub(/@/, '')] = json_marshal(object.instance_variable_get(var_name))
       end
       
-      return {'__jsonclass__' => [object.class.name]}.merge(instance_vars)
+      return {'__jsonclass__' => [object.class.name, 'new']}.merge(instance_vars)
     end
   end
+  
+  SAFE_CONSTRUCTORS = ['new', 'allocate', '_load']
   
   # takes an object from the network, and decodes any marshalled hashes back in to ruby objects
   def json_restore(object)
@@ -150,15 +154,18 @@ class Legs
       if object.keys.include? '__jsonclass__'
         constructor = object.delete('__jsonclass__')
         class_name = constructor.shift.to_s
-        object_class = Module.const_get(class_name) rescue false
         
-        if object_class.name == class_name
-          return object_class._load(constructor.last) if object_class.respond_to?(:_load) and constructor.first == '**_dump**'
-          
-          if constructor.empty?
-            instance = object_class.allocate
+        # find the constant through the heirachy
+        object_class = Module
+        class_name.split(/::/).each { |piece_of_const| object_class = object_class.const_get(piece_of_const) } rescue false
+        
+        if object_class
+          unless constructor.empty?
+            raise "Unsafe marshaling constructor method: #{constructor.first}" unless (object_class == Legs and constructor.first =~ /^__make_/) or SAFE_CONSTRUCTORS.include?(constructor.first)
+            raise "#{class_name} doesn't support the #{constructor.first} constructor" unless object_class.respond_to?(constructor.first)
+            instance = object_class.__send__(*constructor)
           else
-            instance = object_class.new(*constructor)
+            instance = object_class.allocate
           end
           
           object.each_pair do |key, value|
@@ -166,7 +173,7 @@ class Legs
           end
           return instance
         else
-          raise "Response contains a #{class_name} but that class is not loaded locally."
+          raise "Response contains a #{class_name} but that class is not loaded locally, it needs to be."
         end
       else
         hash = Hash.new
@@ -271,7 +278,7 @@ class << Legs
             raise "Supplied params object is not an Array" unless params.is_a?(Array)
             raise "Cannot run '#{method}' because it is not defined in this server" unless methods.include?(method.to_s) or methods.include? :method_missing
             
-            puts "Call #{method}(#{params.map { |i| i.inspect }.join(', ')})" if log?
+            puts "Call #{method}(#{params.map(&:inspect).join(', ')})" if log?
             
             @server_object.instance_variable_set(:@caller, from)
             
@@ -340,6 +347,9 @@ class << Legs
     client.close!
   end
   
+  # lets the marshaler transport symbols
+  def __make_symbol(name); name.to_sym; end
+  
   # hooks up these methods so you can use them off the main object too!
   [:broadcast, :find_user_by_object_id, :find_users_by_meta].each do |name|
     define_method name do |*args|
@@ -368,7 +378,7 @@ end
 
 class Legs::StartBlockError < StandardError; end
 class Legs::RequestError < StandardError; end
-class RemoteError < StandardError
+class Legs::RemoteError < StandardError
   def initialize(msg, backtrace)
     super(msg)
     set_backtrace(backtrace)

@@ -7,7 +7,7 @@ Thread.abort_on_exception = true
 #Legs.log = true
 
 # class to test the marshaling
-class MarshalTesterClass; attr_accessor :a, :b, :c; end
+class Marshal::TesterClass; attr_accessor :a, :b, :c; end
 
 # a simple server to test with
 Legs.start(6425) do
@@ -33,7 +33,7 @@ Legs.start(6425) do
   end
   
   def marshal
-    obj = MarshalTesterClass.new
+    obj = Marshal::TesterClass.new
     obj.a = 1; obj.b = 2; obj.c = 3
     return obj
   end
@@ -45,6 +45,10 @@ Legs.start(6425) do
   def on_some_event
     $some_event_ran = true
   end
+  
+  # tests that we can call stuff back over the caller's socket
+  def bidirectional; caller.notify!(:bidirectional_test_reciever); end
+  def bidirectional_test_reciever; $bidirectional_worked = true; end
 end
 
 Remote = Legs.new('localhost', 6425)
@@ -134,11 +138,15 @@ class TestLegsObject < Test::Unit::TestCase
     # check async
     abc = 0
     Remote.echo(123) { |r| abc = r.value }
-    sleep(0.2)
+    sleep 0.2
     assert_equal(123, abc)
     
     # check it catches ancestor method calls
     assert_equal('overridden', Remote.methods)
+  end
+  
+  def test_symbol_marshaling
+    assert_equal(Symbol, Remote.echo(:test).class)
   end
 
   def test_socket
@@ -150,6 +158,11 @@ class TestLegsObject < Test::Unit::TestCase
     assert_equal(1, object.a)
     assert_equal(2, object.b)
     assert_equal(3, object.c)
+  end
+  
+  def test_bidirectional
+    $bidirectional_worked = false; Remote.bidirectional; sleep 0.2
+    assert_equal(true, $bidirectional_worked)
   end
 end
 
