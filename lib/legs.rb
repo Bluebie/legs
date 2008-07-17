@@ -209,58 +209,63 @@ class << Legs
   def initializer
     ObjectSpace.define_finalizer(self) { self.stop! }
     @incoming = []; @outgoing = []; @messages = Queue.new; @terminator = "\n"; @log = false
-    @incoming_mutex = Mutex.new; @outgoing_mutex = Mutex.new
+    @incoming_mutex = Mutex.new; @outgoing_mutex = Mutex.new; @started = false
   end
   
   
   # starts the server, pass nil for port to make a 'server' that doesn't actually accept connections
   # This is useful for adding methods to Legs so that systems you connect to can call methods back on you
   def start(port=30274, &blk)
-    @server_class.module_eval(&blk) and return if started?
-    raise "Legs.start requires a block" unless block_given?
+    return @server_class.module_eval(&blk) if started? and blk.respond_to? :call
     @started = true
     
-    # make the fake class
-    @server_class = Class.new
-    @server_class.module_eval do
-      private
-      attr_reader :server, :caller
-      
-      # sends a notification message to all connected clients
-      def broadcast(*args)
-        if args.first.is_a?(Array)
-          list = args.shift
-          method = args.shift
-        elsif args.first.is_a?(String) or args.first.is_a?(Symbol)
-          list = server.incoming
-          method = args.shift
-        else
-          raise "You need to specify a 'method' to broadcast out to"
+    # makes a nice clean class to hold all the server methods.
+    if @server_class.nil?
+      @server_class = Class.new
+      @server_class.module_eval do
+        private
+        attr_reader :server, :caller
+        
+        # sends a notification message to all connected clients
+        def broadcast(*args)
+          if args.first.is_a?(Array)
+            list = args.shift
+            method = args.shift
+          elsif args.first.is_a?(String) or args.first.is_a?(Symbol)
+            list = server.incoming
+            method = args.shift
+          else
+            raise "You need to specify a 'method' to broadcast out to"
+          end
+          
+          list.each { |user| user.notify!(method, *args) }
         end
         
-        list.each { |user| user.notify!(method, *args) }
-      end
-      
-      # Finds a user by the value of a certain property... like find_user_by :object_id, 12345
-      def find_user_by_object_id value
-        server.incoming.find { |user| user.object_id == value }
-      end
-      
-      # finds user's with the specified meta keys matching the specified values, can use regexps and stuff, like a case block
-      def find_users_by_meta hash = nil
-        raise "You need to give find_users_by_meta a hash to check the user's meta hash against" if hash.nil?
-        server.incoming.select do |user|
-          hash.all? { |key, value| value === user.meta[key] }
+        # Finds a user by the value of a certain property... like find_user_by :object_id, 12345
+        def find_user_by_object_id value
+          server.incoming.find { |user| user.object_id == value }
         end
+        
+        # finds user's with the specified meta keys matching the specified values, can use regexps and stuff, like a case block
+        def find_users_by_meta hash = nil
+          raise "You need to give find_users_by_meta a hash to check the user's meta hash against" if hash.nil?
+          server.incoming.select do |user|
+            hash.all? { |key, value| value === user.meta[key] }
+          end
+        end
+        
+        public # makes it public again for the user code
       end
-      
-      public # makes it public again for the user code
     end
-    @server_class.module_eval(&blk)
-    @server_object = @server_class.allocate
-    @server_object.instance_variable_set(:@server, self)
-    @server_object.instance_eval { initialize }
     
+    @server_class.module_eval(&blk) if blk.respond_to?(:call)
+    
+    if @server_object.nil?
+      @server_object = @server_class.allocate
+      @server_object.instance_variable_set(:@server, self)
+      @server_object.instance_eval { initialize }
+    end
+  
     @message_processor = Thread.new do
       while started?
         sleep 0.01 while @messages.empty?
@@ -302,9 +307,9 @@ class << Legs
           end
         end
       end
-    end
+    end unless @message_processor and @message_processor.alive?
     
-    unless port.nil? or port == false
+    if ( port.nil? or port == false ) == false and @listener.nil?
       @listener = TCPServer.new(port)
       
       @acceptor_thread = Thread.new do
@@ -347,15 +352,18 @@ class << Legs
     client.close!
   end
   
+  # add's a method to the 'server'
+  def define_method(name, &blk); @server_class.class_eval { define_method(name, &blk) }; end
+  
   # lets the marshaler transport symbols
   def __make_symbol(name); name.to_sym; end
   
   # hooks up these methods so you can use them off the main object too!
   [:broadcast, :find_user_by_object_id, :find_users_by_meta].each do |name|
     define_method name do |*args|
-      @incoming_mutex.synchronize do
+      @incoming_mutex.synchronize do; @outgoing_mutex.synchronize do
         @server_object.__send__(name, *args)
-      end
+      end; end
     end
   end
 end

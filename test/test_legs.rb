@@ -86,8 +86,8 @@ class TestLegsObject < Test::Unit::TestCase
   end
 
   def test_class_outgoing
-    assert_equal(Legs.outgoing.class, Array)
-    assert_equal(Legs.outgoing.length, 1)
+    assert_equal(true, Legs.outgoing.is_a?(Array))
+    assert_equal(1, Legs.outgoing.length)
   end
   
   def test_class_open
@@ -99,36 +99,36 @@ class TestLegsObject < Test::Unit::TestCase
   end
 
   def test_class_started_eh
-    assert_equal(Legs.started?, true)
+    assert_equal(true, Legs.started?)
   end
 
   def test_connected_eh
-    assert_equal(Remote.connected?, true)
+    assert_equal(true, Remote.connected?)
   end
 
   def test_close_bang
     ii = Legs.new('localhost', 6425)
-    assert_equal(Legs.outgoing.length, 2)
+    assert_equal(2, Legs.outgoing.length)
     ii.close!
-    assert_equal(Legs.outgoing.length, 1)
+    assert_equal(1, Legs.outgoing.length)
   end
 
   def test_meta
     assert_equal(true, Remote.meta.is_a?(Hash))
-    Remote.meta[:yada] = "Yada"
-    assert_equal("Yada", Remote.meta[:yada])
+    Remote.meta[:yada] = 'Yada'
+    assert_equal('Yada', Remote.meta[:yada])
   end
 
   def test_notify_bang
     $notified = false
     Remote.notify! :notified
     sleep(0.2)
-    assert_equal($notified, true)
+    assert_equal(true, $notified)
   end
 
   def test_parent
-    assert_equal(Remote.parent, false)
-    assert_equal(Legs.incoming.first.parent, Legs)
+    assert_equal(false, Remote.parent)
+    assert_equal(Legs, Legs.incoming.first.parent)
   end
 
   def test_send_bang
@@ -154,15 +154,29 @@ class TestLegsObject < Test::Unit::TestCase
   end
   
   def test_marshaling
-    object = Remote.marshal
-    assert_equal(1, object.a)
-    assert_equal(2, object.b)
-    assert_equal(3, object.c)
+   object = Remote.marshal
+   assert_equal(1, object.a)
+   assert_equal(2, object.b)
+   assert_equal(3, object.c)
   end
   
   def test_bidirectional
-    $bidirectional_worked = false; Remote.bidirectional; sleep 0.2
-    assert_equal(true, $bidirectional_worked)
+   $bidirectional_worked = false; Remote.bidirectional; sleep 0.2
+   assert_equal(true, $bidirectional_worked)
+  end
+  
+  # makes sure the define_method thingo works for adding blocks to Legs
+  def test_adding_block
+    bound_var = 'Ladedadedah'
+    Legs.define_method(:defined_meth) { bound_var }
+    assert_equal(bound_var, Remote.defined_meth)
+  end
+  
+  # this is to make sure we can run the start method a ton of times without bad side effects
+  def test_start_again_and_again
+    Legs.start
+    Legs.start { def adding_another_method; true; end }
+    assert_equal(true, Remote.adding_another_method)
   end
 end
 
