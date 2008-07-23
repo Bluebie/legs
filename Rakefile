@@ -2,7 +2,7 @@ require 'rubygems'
 require 'rake'
 require 'rake/gempackagetask'
 
-LEGS_GEMSPEC = eval(File.read('mtest.gemspec'))
+LEGS_GEMSPEC = eval(File.read('legs.gemspec'))
 
 Rake::GemPackageTask.new(LEGS_GEMSPEC) do |pkg|
   pkg.need_tar_bz2 = true
