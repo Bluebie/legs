@@ -352,8 +352,18 @@ class << Legs
     client.close!
   end
   
-  # add's a method to the 'server'
+  # add's a method to the 'server' class, bound in to that class
   def define_method(name, &blk); @server_class.class_eval { define_method(name, &blk) }; end
+  
+  # add's a block to the 'server' class in a way that retains it's old bindings.
+  # the block will be passed the caller object, followed by the args.
+  def add_block(name, &block)
+    @server_class.class_eval do
+      define_method(name) do |*args|
+        block.call caller, *args
+      end
+    end
+  end
   
   # lets the marshaler transport symbols
   def __make_symbol(name); name.to_sym; end

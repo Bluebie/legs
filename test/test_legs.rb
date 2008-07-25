@@ -165,11 +165,14 @@ class TestLegsObject < Test::Unit::TestCase
    assert_equal(true, $bidirectional_worked)
   end
   
-  # makes sure the define_method thingo works for adding blocks to Legs
+  # makes sure the block adding thingos work
   def test_adding_block
-    bound_var = 'Ladedadedah'
+    @bound_var = bound_var = 'Ladedadedah'
     Legs.define_method(:defined_meth) { bound_var }
     assert_equal(bound_var, Remote.defined_meth)
+    
+    Legs.add_block(:unbound_meth) { @bound_var }
+    assert_equal(bound_var, Remote.unbound_meth)
   end
   
   # this is to make sure we can run the start method a ton of times without bad side effects
