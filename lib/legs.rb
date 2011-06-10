@@ -77,7 +77,8 @@ class Legs
       self.class.outgoing_mutex.synchronize { self.class.outgoing.delete(self) }
     end
     
-    Thread.new { sleep(1); @socket.close rescue nil }
+    #Thread.new { sleep(1); @socket.close rescue nil }
+    @socket.close
   end
   
   # send a notification to this user
@@ -88,7 +89,7 @@ class Legs
   
   # sends a normal RPC request that has a response
   def send!(method, *args, &blk)
-    puts "Call #{inspect}: #{method}(#{args.map(&:inspect).join(', ')})" if self.class.log?
+    puts "Call #{self.inspect}: #{method}(#{args.map(&:inspect).join(', ')})" if self.class.log?
     id = get_unique_number
     send_data! 'method' => method.to_s, 'params' => args, 'id' => id
     
@@ -192,9 +193,9 @@ class Legs
 end
 
 # undef's the superclass's methods so they won't get in the way
-removal_list = Legs.instance_methods(true)
+removal_list = Legs.instance_methods(true).map { |i| i.to_s }
 removal_list -= %w{JSON new class object_id send __send__ __id__ < <= <=> => > == === yield raise}
-removal_list -= Legs.instance_methods(false)
+removal_list -= Legs.instance_methods(false).map { |i| i.to_s }
 Legs.class_eval { removal_list.each { |m| undef_method m } }
 
 
@@ -271,7 +272,7 @@ class << Legs
         sleep 0.01 while @messages.empty?
         data, from = @messages.deq
         method = data['method']; params = data['params']
-        methods = @server_object.public_methods(false)
+        methods = @server_object.public_methods(false).map { |i| i.to_s }
         
         # close dead connections
         if data['method'] == '**remote__disconnecting**'
