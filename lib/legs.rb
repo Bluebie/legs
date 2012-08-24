@@ -7,10 +7,9 @@ class Legs
   attr_reader :socket, :parent, :meta
   def inspect; "<Legs:#{object_id} Meta: #{@meta.inspect}>"; end
   
-  # Legs.new for a client, subclass to make a server, .new then makes server and client!
+  # Legs.new for a client connected to some other legs server
   def initialize(host = 'localhost', port = 30274)
     self.class.start(port) if self.class != Legs && !self.class.started?
-    ObjectSpace.define_finalizer(self) { self.close! }
     @parent = false; @responses = Hash.new; @meta = {}; @disconnected = false
     @responses_mutex = Mutex.new; @socket_mutex = Mutex.new
     
@@ -205,12 +204,13 @@ class << Legs
   attr_reader :incoming, :outgoing, :server_object, :incoming_mutex, :outgoing_mutex, :messages_mutex
   alias_method :log?, :log
   alias_method :users, :incoming
-  def started?; @started; end
+  def started?; @state[:started]; end
   
   def initializer
-    ObjectSpace.define_finalizer(self) { self.stop! }
     @incoming = []; @outgoing = []; @messages = Queue.new; @terminator = "\n"; @log = false
-    @incoming_mutex = Mutex.new; @outgoing_mutex = Mutex.new; @started = false
+    @incoming_mutex = Mutex.new; @outgoing_mutex = Mutex.new; @state = { :started => false}
+    
+    ObjectSpace.define_finalizer(self) { self.class.finalize(@incoming, @state) }
   end
   
   
@@ -218,7 +218,7 @@ class << Legs
   # This is useful for adding methods to Legs so that systems you connect to can call methods back on you
   def start(port=30274, &blk)
     return @server_class.module_eval(&blk) if started? and blk.respond_to? :call
-    @started = true
+    @state[:started] = true
     
     # makes a nice clean class to hold all the server methods.
     if @server_class.nil?
@@ -326,8 +326,13 @@ class << Legs
   
   # stops the server, disconnects the clients
   def stop
-    @started = false
-    @incoming.each { |user| user.close! }
+    self.class.finalize(@incoming, @state)
+  end
+  
+  # implemented on class to work around enclosure stuff with object finalizer
+  def self.finalize(incoming, state)
+    state[:started] = false
+    incoming.each { |user| user.close! }
   end
   
   # returns an array of all connections
